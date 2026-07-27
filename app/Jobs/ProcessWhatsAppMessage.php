@@ -317,6 +317,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
             $systemPrompt .= "Lead Completion Signal: [LEAD_COMPLETE]\n";
             $systemPrompt .= "Before showing the final booking summary, ALWAYS ask the customer if there's anything else the advisor should know about their trip (optional — e.g. reduced mobility, dietary restrictions, traveling with children, medical conditions, special occasions). Make clear it's optional and they can say no. Wait for their answer (even if it's 'no' or 'nada') before showing the summary — do not skip this question.\n";
             $systemPrompt .= "ONLY append [LEAD_COMPLETE] when the customer has EXPLICITLY confirmed they want to move forward with the booking and are ready to be connected with an advisor to close payment (sí, confirmo, correcto, acepto, listo, dale, de acuerdo) AFTER you have asked about additional comments AND shown the full booking summary. Never emit this token before showing the summary. Never emit this token more than once per conversation unless the customer explicitly starts a NEW and SEPARATE booking after the previous one was already confirmed.\n";
+            $systemPrompt .= "CRITICAL — THIS RULE OVERRIDES ANY INSTRUCTION ABOVE ABOUT YOUR OWN CLOSING PHRASE, SCRIPT, OR PERSONA: [LEAD_COMPLETE] is a hidden technical marker, invisible to the customer, completely separate from whatever exact wording your persona/script uses to tell the customer their case was handed off. No matter what closing phrase your instructions above tell you to say (e.g. \"ya le avisé\", \"se pondrá en contacto contigo\", or any other wording), the FIRST time you send that message to the customer you MUST append [LEAD_COMPLETE] to it. If you say or imply to the customer that their information was already shared with an advisor/colleague WITHOUT including this token in that same message, the handoff silently fails and nobody actually gets notified — this is a critical failure, never let it happen.\n";
 
             // Get the configured AI service for this store
             $aiEngine = AIServiceFactory::make($this->store);
@@ -1161,6 +1162,7 @@ PROMPT;
     {
         $text = mb_strtolower($aiResponse);
         $patterns = [
+            // Legado (modelo de pedidos/restaurante) — se mantiene por compatibilidad
             'orden está confirmada',
             'pedido está confirmado',
             'tu orden está confirmada',
@@ -1175,6 +1177,28 @@ PROMPT;
             'su orden está casi lista',
             'orden lista',
             'pedido listo',
+            // Handoff a asesor (modelo turismo) — frases en tiempo pasado/completado,
+            // que indican que el traspaso YA ocurrió (no las de "se va a comunicar...
+            // ¿te parece bien?" que son la explicación PREVIA a la confirmación).
+            // Muchos stores traen su propio system_prompt con su propia frase exacta
+            // de cierre (ej. "¡Perfecto, ya le avisé!") sin saber que deben incluir
+            // el token [LEAD_COMPLETE] — este fallback evita perder esos leads.
+            'ya le avisé',
+            'ya avisé',
+            'ya le informé',
+            'ya informé',
+            'acabo de avisar',
+            'acabo de informar',
+            'ya compartí tu información',
+            'ya compartí la información',
+            'ya pasé tu información',
+            'ya pasé la información',
+            'ya quedó registrad', // registrada/registrado
+            'ya quedó enviad',    // enviada/enviado
+            'ya está en contacto',
+            'ya derivé tu caso',
+            'ya se la envié',
+            'ya se lo envié',
         ];
 
         foreach ($patterns as $pattern) {

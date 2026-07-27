@@ -54,7 +54,7 @@ class Lead extends Model
         // Se dispara cuando el asesor confirma con el botón/comando ACEPTADO
         // (o sus sinónimos DERIVADO) — no repite la promesa que ya dio la IA
         // al derivar el lead, confirma que un humano ya lo revisó.
-        self::STATUS_ACEPTADO  => '👀 ¡Tu asesor ya revisó tu información! Se pondrá en contacto contigo muy pronto para confirmar los detalles y el pago de tu reserva.',
+        self::STATUS_ACEPTADO  => '👀 ¡Tu asesor ya revisó tu información!',
         self::STATUS_CERRADO   => '🎉 ¡Tu reserva quedó confirmada! Gracias por elegirnos. ¡Que disfrutes tu experiencia!',
         self::STATUS_CANCELADO => '❌ Tu reserva fue cancelada. Si tienes dudas, escríbenos y te ayudamos.',
     ];
