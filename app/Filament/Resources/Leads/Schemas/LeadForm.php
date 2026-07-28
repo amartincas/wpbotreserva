@@ -9,6 +9,7 @@ use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Schema;
 use App\Models\Lead;
+use Illuminate\Support\Facades\Auth;
 
 class LeadForm
 {
@@ -16,6 +17,20 @@ class LeadForm
     {
         return $schema
             ->schema([
+                Select::make('store_id')
+                    ->label('Store')
+                    ->relationship(
+                        'store',
+                        'name',
+                        fn ($query) => $query
+                            ->when(
+                                !Auth::user()?->is_super_admin,
+                                fn ($q) => $q->where('id', Auth::user()?->store_id)
+                            )
+                    )
+                    ->required()
+                    ->default(Auth::user()?->store_id)
+                    ->columnSpan(2),
                 TextInput::make('customer_name')
                     ->label('Nombre Completo')
                     ->required()
