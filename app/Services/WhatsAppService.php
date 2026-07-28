@@ -235,6 +235,100 @@ class WhatsAppService
     }
 
     /**
+     * Notifica al asesor de un store sobre una nueva reserva/lead, usando la
+     * plantilla Meta "nuevo_lead" (9 variables). Extraído de
+     * ProcessWhatsAppMessage::notifyAdvisor() para poder reutilizarlo también
+     * desde la conversión manual de leads (comando CONVERTIR del asesor) sin
+     * duplicar el armado de variables.
+     *
+     * @param string $customerPhone Teléfono del cliente ({{4}} de la plantilla)
+     * @param array  $leadData      Datos del lead: customer_name, origin_city, product_service_name, order_extras, comments
+     */
+    public static function notifyAdvisorOfLead(
+        Store $store,
+        \App\Models\Lead $lead,
+        string $customerPhone,
+        array $leadData
+    ): bool {
+        if (!$store->hasAdvisorNotification()) {
+            Log::info('ADVISOR_NOTIFY: Skipped — advisor_whatsapp or advisor_notification_template not configured', [
+                'store_id' => $store->id,
+            ]);
+            return false;
+        }
+
+        try {
+            // Nombre limpio del tour/destino confirmado, con extras si aplica
+            $productForTemplate = $lead->product_name
+                ?? $leadData['product_service_name']
+                ?? 'N/A';
+
+            if (!empty($leadData['order_extras'])) {
+                $productForTemplate .= ' + ' . $leadData['order_extras'];
+            }
+
+            // Variables en el orden de la plantilla Meta "nuevo_lead":
+            // {{1}} nombre del asesor/agencia  {{2}} lead_id  {{3}} customer_name
+            // {{4}} customer_phone  {{5}} origin_city  {{6}} destino (tour)
+            // {{7}} travelers_count  {{8}} tour_date  {{9}} comments
+            $variables = [
+                $store->name,
+                (string) $lead->id,
+                $leadData['customer_name'] ?? 'N/A',
+                $customerPhone,
+                $leadData['origin_city'] ?? 'N/A',
+                $productForTemplate,
+                $lead->travelers_count ?: 'N/A',
+                $lead->tour_date ?: 'N/A',
+                $leadData['comments'] ?? 'N/A',
+            ];
+
+            // Registrar el envío para poder rastrear su entrega (delivery_status
+            // se actualiza cuando llega el status callback de Meta con el wamid).
+            $notifyMessage = \App\Models\WhatsAppMessage::create([
+                'store_id' => $store->id,
+                'customer_phone' => $store->advisor_whatsapp,
+                'role' => 'system',
+                'content' => "Notificación de reserva #{$lead->id} enviada al asesor ({$store->advisor_notification_template})",
+            ]);
+
+            $sent = self::sendTemplateMessage(
+                to: $store->advisor_whatsapp,
+                templateName: $store->advisor_notification_template,
+                languageCode: $store->advisor_notification_template_lang ?? 'es_CO',
+                variables: $variables,
+                store: $store,
+                messageId: $notifyMessage->id,
+            );
+
+            if ($sent) {
+                Log::info('ADVISOR_NOTIFY: Reserva enviada al asesor', [
+                    'store_id' => $store->id,
+                    'lead_id'  => $lead->id,
+                    'advisor'  => $store->advisor_whatsapp,
+                    'template' => $store->advisor_notification_template,
+                ]);
+            } else {
+                Log::warning('ADVISOR_NOTIFY: Fallo al enviar reserva al asesor', [
+                    'store_id' => $store->id,
+                    'lead_id'  => $lead->id,
+                    'advisor'  => $store->advisor_whatsapp,
+                ]);
+            }
+
+            return $sent;
+        } catch (\Exception $e) {
+            // No relanzamos: fallo en notificación NO debe cancelar el flujo principal
+            Log::error('ADVISOR_NOTIFY: Excepción al notificar asesor', [
+                'store_id' => $store->id,
+                'lead_id'  => $lead->id,
+                'error'    => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
      * Test WhatsApp connection with provided credentials
      *
      * @param string $phoneNumberId WhatsApp Phone Number ID

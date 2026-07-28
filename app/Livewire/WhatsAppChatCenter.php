@@ -29,6 +29,7 @@ class WhatsAppChatCenter extends Component
     public ?int $selectedLeadId = null; // For JS modal
     public $whatsappTemplates = [];    // List templates
     public array $messageStatuses = []; // Cache of message status values for rendering
+    public array $leadDraft = []; // Datos acumulados por el bot para la conversación seleccionada, aún sin convertir en Reserva
 
     public function mount()
     {
@@ -203,13 +204,87 @@ class WhatsAppChatCenter extends Component
             $this->selectedLeadId = $lead?->id;
             // Load WhatsApp templates for this store (for manual template sending)
             $this->whatsappTemplates = \App\Models\WhatsAppTemplate::where('store_id', $storeId)->get();
+
+            // Datos acumulados por el bot aún sin convertir en Reserva formal
+            // (ver botón "Crear Reserva" — mismo mecanismo que el comando
+            // CONVERTIR del asesor por WhatsApp).
+            $draftStore = Store::find($storeId);
+            $this->leadDraft = $draftStore
+                ? \App\Services\LeadDraftService::getDraft($draftStore, (string) $phone)
+                : [];
         } else {
             $this->selectedConversationId = null;
+            $this->leadDraft = [];
         }
 
         // Important for JavaScript
         $this->loadConversations();
         $this->dispatch('scroll-down');
+    }
+
+    /**
+     * Crea manualmente la Reserva de la conversación seleccionada a partir
+     * del borrador acumulado por el bot (mismo mecanismo que el comando de
+     * WhatsApp CONVERTIR del asesor) — botón "Crear Reserva" del chat.
+     */
+    public function createLeadFromDraft(): void
+    {
+        if (!$this->selectedPhone) {
+            return;
+        }
+
+        $isSuperAdmin = Auth::user()?->is_super_admin ?? false;
+
+        if ($isSuperAdmin && !$this->filterStoreId) {
+            $storeId = WhatsAppMessage::query()
+                ->where('customer_phone', $this->selectedPhone)
+                ->value('store_id');
+        } elseif ($this->filterStoreId) {
+            $storeId = $this->filterStoreId;
+        } else {
+            $storeId = Auth::user()?->store_id;
+        }
+
+        $store = $storeId ? Store::find($storeId) : null;
+
+        if (!$store) {
+            Notification::make()
+                ->title('No se pudo determinar el store de esta conversación')
+                ->danger()
+                ->send();
+            return;
+        }
+
+        $result = \App\Services\LeadDraftService::convertDraftToLead($store, $this->selectedPhone);
+
+        if (!$result['success']) {
+            Notification::make()
+                ->title('No se pudo crear la reserva')
+                ->body($result['error'])
+                ->danger()
+                ->send();
+            return;
+        }
+
+        Log::info('LEAD_MANUAL_CONVERT: Reserva creada desde el panel de chat', [
+            'store_id'       => $store->id,
+            'lead_id'        => $result['lead']->id,
+            'customer_phone' => $this->selectedPhone,
+            'user_id'        => Auth::id(),
+            'notify_sent'    => $result['notified'],
+        ]);
+
+        Notification::make()
+            ->title("Reserva #{$result['lead']->id} creada")
+            ->body($result['notified']
+                ? 'Se notificó al asesor correctamente.'
+                : 'La reserva se creó, pero falló el envío de la notificación al asesor — revisa los logs.')
+            ->success()
+            ->send();
+
+        // Refrescar: la reserva recién creada ya debe reflejarse (selectedLeadId,
+        // borrador limpio) y el borrador queda vacío tras la conversión.
+        $this->selectConversation($this->selectedPhone);
     }
 
     /**

@@ -306,6 +306,14 @@ class WhatsAppController extends Controller
                     ]);
                     return response('EVENT_RECEIVED', 200);
                 }
+
+                // No fue STORE ni REPORTE — probar los mismos comandos que
+                // tiene el asesor (ACEPTADO/CERRADO/CANCELADO/RESERVA/CONVERTIR).
+                // Operan sobre $store, que para el superadmin es su store
+                // asignado (User.store_id) o el primer store del sistema si
+                // no tiene uno asignado — no sobre "todos los stores".
+                $this->handleAdvisorTextCommand($store, $fromPhone, $textBody);
+                return response('EVENT_RECEIVED', 200);
             }
         }
     }
@@ -433,6 +441,25 @@ private function handleAdvisorTextCommand(
         return;
     }
 
+    // Comando especial: CONVERTIR <telefono_cliente> — crea la reserva a
+    // mano a partir de los datos que el bot ya acumuló en la conversación
+    // (nombre, ciudad, fechas, personas, comentarios), aunque el cliente
+    // nunca haya llegado a confirmar el resumen final. Rescata leads que
+    // quedaron "vivos" en el borrador pero el cliente dejó de responder.
+    if ($comando === 'convertir') {
+        $targetPhone = trim($parts[1] ?? '');
+        if (!$targetPhone || !preg_match('/^\d{7,15}$/', $targetPhone)) {
+            \App\Services\WhatsAppService::sendMessage(
+                to:      $fromPhone,
+                message: "❓ Indica el número de WhatsApp del cliente. Ejemplo: *CONVERTIR 573128340860*",
+                store:   $store,
+            );
+            return;
+        }
+        $this->handleConvertDraftToLead($store, $fromPhone, $targetPhone);
+        return;
+    }
+
     // 1. Resolver estado
     $newStatus = \App\Models\Lead::resolveStatus($comando);
 
@@ -444,7 +471,7 @@ private function handleAdvisorTextCommand(
 
         \App\Services\WhatsAppService::sendMessage(
             to:      $fromPhone,
-            message: "❓ Comando no reconocido: \"{$text}\"\n\nComandos válidos:\n• ACEPTADO [#reserva]\n• CERRADO [#reserva]\n• CANCELADO [#reserva]\n• RESERVA [#reserva]",
+            message: "❓ Comando no reconocido: \"{$text}\"\n\nComandos válidos:\n• ACEPTADO [#reserva]\n• CERRADO [#reserva]\n• CANCELADO [#reserva]\n• RESERVA [#reserva]\n• CONVERTIR <telefono_cliente>",
             store:   $store,
         );
         return;
@@ -624,6 +651,52 @@ private function handleResendReservationInfo(
         'store_id' => $store->id,
         'lead_id'  => $lead->id,
         'advisor'  => $fromPhone,
+    ]);
+}
+
+/**
+ * Crea manualmente una reserva a partir del borrador acumulado por el bot
+ * para un teléfono de cliente — mismo mecanismo (order_draft) que usa
+ * ProcessWhatsAppMessage para armar el Lead automáticamente al detectar
+ * [LEAD_COMPLETE], pero disparado a mano por el asesor.
+ *
+ * Comando: CONVERTIR <telefono_cliente>
+ * Útil cuando el cliente ya dio todos los datos pero nunca confirmó el
+ * resumen final (ej. dejó de responder) — sin esto, esos datos se quedan
+ * atrapados en caché 4h y después se pierden sin generar ninguna reserva.
+ */
+private function handleConvertDraftToLead(
+    \App\Models\Store $store,
+    string $fromPhone,
+    string $customerPhone
+): void {
+    $result = \App\Services\LeadDraftService::convertDraftToLead($store, $customerPhone);
+
+    if (!$result['success']) {
+        \App\Services\WhatsAppService::sendMessage(
+            to:      $fromPhone,
+            message: "❌ {$result['error']}",
+            store:   $store,
+        );
+        return;
+    }
+
+    $lead = $result['lead'];
+
+    \App\Services\WhatsAppService::sendMessage(
+        to:      $fromPhone,
+        message: $result['notified']
+            ? "✅ Reserva #{$lead->id} creada manualmente para {$customerPhone} y notificación reenviada."
+            : "⚠️ Reserva #{$lead->id} creada para {$customerPhone}, pero falló el reenvío de la notificación — revisa los logs.",
+        store:   $store,
+    );
+
+    Log::info('LEAD_MANUAL_CONVERT: Reserva creada a mano desde el borrador', [
+        'store_id'       => $store->id,
+        'lead_id'        => $lead->id,
+        'customer_phone' => $customerPhone,
+        'advisor'        => $fromPhone,
+        'notify_sent'    => $result['notified'],
     ]);
 }
 

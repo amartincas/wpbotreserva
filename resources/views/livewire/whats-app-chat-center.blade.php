@@ -69,6 +69,34 @@
                 this.closeModal();
             }
         }));
+
+        Alpine.data('createLeadModal', () => ({
+            open: false,
+
+            init() {
+                // Expone la instancia globalmente para que el botón "Crear
+                // Reserva" (fuera del árbol de este componente Alpine) pueda
+                // abrirlo, igual que window.__templateModal.
+                window.__createLeadModal = this;
+            },
+
+            openModal() {
+                this.open = true;
+            },
+
+            closeModal() {
+                this.open = false;
+            },
+
+            async confirmCreate() {
+                const chatComponent = Livewire.all().find(c => c.name === 'whats-app-chat-center');
+                if (!chatComponent) {
+                    return;
+                }
+                await chatComponent.$wire.createLeadFromDraft();
+                this.closeModal();
+            }
+        }));
     });
     </script>
 
@@ -123,6 +151,43 @@
                                 <input type="checkbox" wire:model.live="botActive" style="cursor: pointer; width: 16px; height: 16px;">
                             </div>
                         </div>
+
+                        {{-- Datos capturados por el bot aún sin convertir en Reserva formal.
+                             Mismo mecanismo que el comando CONVERTIR del asesor por WhatsApp. --}}
+                        @if (!empty($leadDraft) && \App\Services\LeadDraftService::hasUsableDraft($leadDraft))
+                            @php
+                                $draftLabels = [
+                                    'customer_name'        => 'Nombre',
+                                    'product_service_name' => 'Plan de interés',
+                                    'origin_city'          => 'Ciudad de salida',
+                                    'travelers_count'      => 'Personas',
+                                    'tour_date'            => 'Fecha de viaje',
+                                    'meeting_point'        => 'Punto de encuentro',
+                                    'comments'             => 'Comentarios adicionales',
+                                ];
+                            @endphp
+                            <div style="margin-top: 10px; padding: 10px 12px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                                    <div style="flex: 1;">
+                                        <div style="font-size: 11px; font-weight: 700; color: #92400e; margin-bottom: 4px;">DATOS CAPTURADOS POR EL BOT (sin reserva creada aún)</div>
+                                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                                            @foreach ($draftLabels as $field => $label)
+                                                @if (!empty($leadDraft[$field]))
+                                                    <span style="font-size: 11px; background: white; border: 1px solid #fde68a; border-radius: 999px; padding: 2px 8px; color: #78350f;">
+                                                        <strong>{{ $label }}:</strong> {{ $leadDraft[$field] }}
+                                                    </span>
+                                                @endif
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                    <button
+                                        onclick="window.__createLeadModal && window.__createLeadModal.openModal()"
+                                        style="background: #d97706; color: white; padding: 0.5rem 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;">
+                                        Crear Reserva
+                                    </button>
+                                </div>
+                            </div>
+                        @endif
                     </div>
 
                     {{-- Messages --}}
@@ -268,6 +333,38 @@
                         @click="submitTemplate()"
                         style="margin-top: 15px; width: 100%; background: #2563eb; color: white; padding: 10px; border-radius: 8px; font-weight: bold; border: none; cursor: pointer;">
                         Enviar Plantilla Oficial
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{-- ── CREATE LEAD CONFIRM MODAL ────────────────────────────────────────── --}}
+    {{-- Mismo patrón que el TEMPLATE MODAL de arriba: sibling del grid, fuera
+         del árbol que Livewire vuelve a morfear, position:fixed para escapar
+         del layout. Confirma antes de disparar la notificación real al asesor. --}}
+    <div
+        x-data="createLeadModal"
+        wire:ignore
+        x-show="open"
+        @click.self="closeModal()"
+        style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; align-items: center; justify-content: center; padding: 2rem;"
+    >
+        <div style="background: white; border-radius: 12px; width: 100%; max-width: 420px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);">
+            <div style="padding: 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+                <h4 style="font-weight: 700; color: black; margin: 0;">¿Crear la reserva?</h4>
+                <button @click="closeModal()" style="border: none; background: none; font-size: 1.5rem; cursor: pointer; color: black; line-height: 1;">&times;</button>
+            </div>
+            <div style="padding: 1rem;">
+                <p style="font-size: 0.875rem; color: #4b5563; margin: 0 0 1rem;">
+                    Se va a crear la reserva con los datos capturados hasta ahora y se le va a enviar la notificación al asesor por WhatsApp. Esta acción no se puede deshacer.
+                </p>
+                <div style="display: flex; gap: 10px;">
+                    <button @click="closeModal()" style="flex: 1; background: #f3f4f6; color: #374151; padding: 10px; border-radius: 8px; font-weight: 600; border: none; cursor: pointer;">
+                        Cancelar
+                    </button>
+                    <button @click="confirmCreate()" style="flex: 1; background: #d97706; color: white; padding: 10px; border-radius: 8px; font-weight: 700; border: none; cursor: pointer;">
+                        Sí, crear reserva
                     </button>
                 </div>
             </div>
