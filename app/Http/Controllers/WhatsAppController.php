@@ -528,6 +528,17 @@ private function handleAdvisorTextCommand(
         return;
     }
 
+    // 3b. Si ya está en el estado pedido, no reenviar la notificación al
+    // cliente — evita duplicados si el asesor manda el comando dos veces.
+    if ($lead->status === $newStatus) {
+        \App\Services\WhatsAppService::sendMessage(
+            to:      $fromPhone,
+            message: "ℹ️ La reserva #{$lead->id} ya estaba en estado *{$newStatus}* — no se reenvía notificación al cliente.",
+            store:   $store,
+        );
+        return;
+    }
+
     // 4. Actualizar estado
     $oldStatus = $lead->status;
     $lead->update(['status' => $newStatus]);
@@ -731,6 +742,20 @@ private function handleAdvisorButtonResponse(
     if (!$lead) {
         Log::warning('BUTTON_RESPONSE: No se encontró lead activo para actualizar', [
             'store_id'    => $store->id,
+            'button_text' => $buttonText,
+        ]);
+        return;
+    }
+
+    // Si el lead YA está en ese estado, no hacer nada — evita doble
+    // notificación al cliente cuando el botón se toca dos veces (doble-tap
+    // accidental, o Meta reenviando el evento con un wamid distinto que
+    // nuestro control de idempotencia por wamid no puede detectar).
+    if ($lead->status === $newStatus) {
+        Log::info('BUTTON_RESPONSE: Lead ya estaba en ese estado, se ignora para no duplicar notificación', [
+            'store_id'    => $store->id,
+            'lead_id'     => $lead->id,
+            'status'      => $newStatus,
             'button_text' => $buttonText,
         ]);
         return;

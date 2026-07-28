@@ -31,6 +31,35 @@ class LeadDraftService
     }
 
     /**
+     * Campos obligatorios para considerar el borrador "completo" — se usa
+     * para decidir si mostrar la franja de "Datos capturados" en el panel
+     * de chat. El teléfono no se valida acá porque siempre está disponible
+     * (es el número de la propia conversación, no un dato que la IA extraiga).
+     * Deliberadamente MÁS estricto que hasUsableDraft(): esa se usa para el
+     * rescate manual (comando CONVERTIR / botón), donde sí queremos permitir
+     * crear la reserva aunque falte algún dato — acá no, la franja del panel
+     * solo debe aparecer cuando ya está todo.
+     */
+    public static function isComplete(array $draft): bool
+    {
+        $requiredFields = [
+            'customer_name',
+            'product_service_name',
+            'origin_city',
+            'travelers_count',
+            'tour_date',
+        ];
+
+        foreach ($requiredFields as $field) {
+            if (empty($draft[$field])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Crea la Reserva a partir del borrador acumulado y notifica al asesor.
      *
      * @return array{success: bool, lead: ?Lead, notified: bool, error: ?string}

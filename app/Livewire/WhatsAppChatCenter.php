@@ -288,6 +288,44 @@ class WhatsAppChatCenter extends Component
     }
 
     /**
+     * Descarta el borrador acumulado por el bot para la conversación
+     * seleccionada, sin crear ninguna reserva — botón "Cancelar" junto a
+     * "Crear Reserva". Oculta la franja de "Datos capturados" del chat.
+     */
+    public function dismissLeadDraft(): void
+    {
+        if (!$this->selectedPhone) {
+            return;
+        }
+
+        $isSuperAdmin = Auth::user()?->is_super_admin ?? false;
+
+        if ($isSuperAdmin && !$this->filterStoreId) {
+            $storeId = WhatsAppMessage::query()
+                ->where('customer_phone', $this->selectedPhone)
+                ->value('store_id');
+        } elseif ($this->filterStoreId) {
+            $storeId = $this->filterStoreId;
+        } else {
+            $storeId = Auth::user()?->store_id;
+        }
+
+        $store = $storeId ? Store::find($storeId) : null;
+
+        if ($store) {
+            \Illuminate\Support\Facades\Cache::forget(\App\Services\LeadDraftService::draftKey($store, $this->selectedPhone));
+
+            Log::info('LEAD_DRAFT_DISMISSED: Borrador descartado desde el panel de chat', [
+                'store_id'       => $store->id,
+                'customer_phone' => $this->selectedPhone,
+                'user_id'        => Auth::id(),
+            ]);
+        }
+
+        $this->leadDraft = [];
+    }
+
+    /**
      * Send manual message to customer
      * Saves to database and sends via WhatsAppService
      * 

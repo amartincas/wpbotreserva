@@ -154,7 +154,7 @@
 
                         {{-- Datos capturados por el bot aún sin convertir en Reserva formal.
                              Mismo mecanismo que el comando CONVERTIR del asesor por WhatsApp. --}}
-                        @if (!empty($leadDraft) && \App\Services\LeadDraftService::hasUsableDraft($leadDraft))
+                        @if (!empty($leadDraft) && \App\Services\LeadDraftService::isComplete($leadDraft))
                             @php
                                 $draftLabels = [
                                     'customer_name'        => 'Nombre',
@@ -180,11 +180,19 @@
                                             @endforeach
                                         </div>
                                     </div>
-                                    <button
-                                        onclick="window.__createLeadModal && window.__createLeadModal.openModal()"
-                                        style="background: #d97706; color: white; padding: 0.5rem 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;">
-                                        Crear Reserva
-                                    </button>
+                                    <div style="display: flex; gap: 6px; flex-shrink: 0;">
+                                        <button
+                                            wire:click="dismissLeadDraft"
+                                            wire:confirm="¿Descartar los datos capturados? No se creará ninguna reserva."
+                                            style="background: white; color: #92400e; padding: 0.5rem 0.9rem; border-radius: 6px; border: 1px solid #fde68a; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;">
+                                            Cancelar
+                                        </button>
+                                        <button
+                                            onclick="window.__createLeadModal && window.__createLeadModal.openModal()"
+                                            style="background: #d97706; color: white; padding: 0.5rem 0.9rem; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap;">
+                                            Crear Reserva
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         @endif
