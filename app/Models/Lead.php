@@ -52,9 +52,9 @@ class Lead extends Model
 
     const STATUS_MESSAGES = [
         // Se dispara cuando el asesor confirma con el botón/comando ACEPTADO
-        // (o sus sinónimos DERIVADO) — no repite la promesa que ya dio la IA
-        // al derivar el lead, confirma que un humano ya lo revisó.
-        self::STATUS_ACEPTADO  => '👀 ¡Tu asesor ya revisó tu información!',
+        // (o sus sinónimos DERIVADO) — confirma que un humano ya revisó la
+        // solicitud y reitera que se pondrá en contacto.
+        self::STATUS_ACEPTADO  => '👀 ¡El asesor ya revisó tu solicitud y en un momento se pondrá en contacto contigo!',
         self::STATUS_CERRADO   => '🎉 ¡Tu reserva quedó confirmada! Gracias por elegirnos. ¡Que disfrutes tu experiencia!',
         self::STATUS_CANCELADO => '❌ Tu reserva fue cancelada. Si tienes dudas, escríbenos y te ayudamos.',
     ];

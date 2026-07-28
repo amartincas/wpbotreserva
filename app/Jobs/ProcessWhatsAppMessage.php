@@ -40,6 +40,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
         public ?string $messageType = null,
         public ?string $mediaId = null,
         public ?int $productContext = null,
+        public ?string $adId = null,
     ) {}
 
     /**
@@ -274,6 +275,53 @@ class ProcessWhatsAppMessage implements ShouldQueue
 
             if (!$hasProductContext) {
                 $systemPrompt .= "Ahora mismo no hay ningún plan en el catálogo que coincida con lo que pidió el cliente. Dile con honestidad que no tienes ese plan específico disponible en este momento y ofrécete a conectarlo con un asesor para revisar opciones — no improvises información turística general del destino.\n";
+            } elseif (!empty($productContext['isMismatchFallback'])) {
+                // El cliente escribió algo específico (ej. un destino concreto)
+                // que NO coincidió por nombre con ningún producto — lo de abajo
+                // es el catálogo completo como último recurso, no necesariamente
+                // lo que el cliente pidió. Sin esta advertencia, la IA asume que
+                // el único producto disponible ES el que el cliente mencionó.
+                $systemPrompt .= "ADVERTENCIA: lo que escribió el cliente NO coincidió por nombre con ningún producto del catálogo — lo que ves en PRODUCT CATALOG DATA es el catálogo completo mostrado como último recurso, no necesariamente el plan que el cliente pidió. Si el cliente mencionó un destino o nombre distinto al de los productos listados arriba, NO asumas que se refiere a uno de ellos — confírmalo primero (ej. \"¿Te refieres a [nombre real del producto]?\") o, si es un destino claramente distinto, dile con honestidad que no tienes ese plan específico en el catálogo antes de seguir pidiéndole datos.\n";
+            }
+
+            // 3c. ID del anuncio de Meta de origen (si el cliente llegó haciendo
+            // clic en un anuncio). Un mismo producto puede tener varios anuncios
+            // con "ganchos" distintos (ej: uno destaca la habitación, otro la
+            // piscina, otro el buffet) — si el system_prompt/ai_sales_strategy
+            // del producto (arriba) trae instrucciones condicionales por ID de
+            // anuncio, este dato es lo que le permite a la IA aplicarlas.
+            if ($this->adId) {
+                $systemPrompt .= "\n\n### ORIGEN DEL CLIENTE:\n";
+                $systemPrompt .= "Este cliente llegó haciendo clic en el anuncio de Meta con ID: {$this->adId}\n";
+                $systemPrompt .= "Si las instrucciones de venta del producto (arriba) tienen un mensaje o gancho de apertura específico para este ID de anuncio, úsalo tal cual como tu primer mensaje. Si no mencionan este ID en particular, usa la apertura general del producto.\n";
+            }
+
+            // 3d. Datos ya confirmados en la conversación (acumulados turno a
+            // turno en el borrador de caché). Se le muestran a la IA para que
+            // no vuelva a preguntar lo que el cliente ya contestó, en vez de
+            // depender de que relea todo el historial crudo cada vez — lo cual
+            // puede fallar si el mensaje relevante ya salió de la ventana de
+            // los últimos mensajes o si la IA simplemente no lo relacionó bien.
+            $draftKey = "order_draft:{$this->store->id}:{$this->from}";
+            $draft = Cache::get($draftKey, []);
+            $draftLabels = [
+                'customer_name'        => 'Nombre',
+                'product_service_name' => 'Plan de interés',
+                'origin_city'          => 'Ciudad de salida',
+                'travelers_count'      => 'Personas',
+                'tour_date'            => 'Fecha de viaje',
+                'meeting_point'        => 'Punto de encuentro',
+                'comments'             => 'Comentarios adicionales',
+            ];
+            $hasAnyDraftData = collect($draft)->only(array_keys($draftLabels))->filter()->isNotEmpty();
+
+            if ($hasAnyDraftData) {
+                $systemPrompt .= "\n\n### DATOS YA CONFIRMADOS EN ESTA CONVERSACIÓN:\n";
+                foreach ($draftLabels as $field => $label) {
+                    $value = $draft[$field] ?? null;
+                    $systemPrompt .= "{$label}: " . (!empty($value) ? $value : '(aún no confirmado)') . "\n";
+                }
+                $systemPrompt .= "Antes de preguntar cualquier dato al cliente, revisa esta lista. Si ya aparece confirmado arriba, NO lo vuelvas a preguntar — continúa solo con lo que diga \"(aún no confirmado)\" y sea relevante según los datos requeridos del producto.\n";
             }
 
             // 4. Contexto de la reserva activa del cliente
@@ -803,6 +851,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
                     'hasServices' => $hasServices,
                     'hasProducts' => $hasProducts,
                     'products' => $allProducts,
+                    'isMismatchFallback' => $result['isMismatchFallback'] ?? false,
                 ];
             }
 
@@ -813,6 +862,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
                 'hasServices' => $result['hasServices'],
                 'hasProducts' => $result['hasProducts'],
                 'products' => $result['products'],
+                'isMismatchFallback' => $result['isMismatchFallback'] ?? false,
             ];
         } catch (\Exception $e) {
             Log::warning('Product context retrieval failed', [

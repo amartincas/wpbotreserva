@@ -155,6 +155,16 @@ class WhatsAppController extends Controller
     $isAdvisor    = $fromPhone ? Store::where('advisor_whatsapp', $fromPhone)->exists() : false;
     $isSuperAdmin = $fromPhone ? \App\Models\User::where('whatsapp', $fromPhone)->where('is_super_admin', true)->exists() : false;
 
+    // Producto y ad_id resueltos por anuncio de Meta/mención — se usan como
+    // contexto inicial de la IA (ver dispatch más abajo) para que el mensaje
+    // de bienvenida hable de ESE producto/plan específico en vez del catálogo
+    // genérico, y para que el store pueda escribir en su system_prompt/
+    // ai_sales_strategy instrucciones condicionales por ad_id (distintos
+    // "ganchos" para un mismo producto). Solo aplica al flujo de cliente;
+    // asesor/superadmin no tienen este concepto.
+    $resolvedProductId = null;
+    $resolvedAdId = null;
+
     if ($isAdvisor) {
         $store = Store::where('advisor_whatsapp', $fromPhone)->first();
     } elseif ($isSuperAdmin) {
@@ -174,6 +184,8 @@ class WhatsAppController extends Controller
         }
 
         $store = $resolution['store'];
+        $resolvedProductId = $resolution['productId'] ?? null;
+        $resolvedAdId = $resolution['adId'] ?? null;
     }
 
     if (!$store) {
@@ -343,7 +355,8 @@ class WhatsAppController extends Controller
         $phoneId,
         $type,
         $mediaId,
-        null
+        $resolvedProductId,
+        $resolvedAdId
     );
 
     Log::info('WhatsApp message queued for processing', [
@@ -908,7 +921,20 @@ private function handleAdvisorButtonResponse(
             $resolution = (new ProductFinderService())->resolveStoreByAdId($adId);
 
             if ($resolution['store'] || $resolution['ambiguousStores']) {
-                return ['store' => $resolution['store'], 'ambiguousStores' => $resolution['ambiguousStores']];
+                return [
+                    'store'           => $resolution['store'],
+                    'ambiguousStores' => $resolution['ambiguousStores'],
+                    // El producto atado al anuncio de Meta — se usa como contexto
+                    // inicial de la IA para que el mensaje de bienvenida hable de
+                    // ESE producto/plan específico, no del catálogo genérico.
+                    'productId'       => $resolution['matchedProducts']->first()?->id,
+                    // El ID crudo del anuncio — se le pasa a la IA como dato de
+                    // contexto para que el propio system_prompt del producto
+                    // pueda tener instrucciones condicionales tipo "si viene del
+                    // anuncio X, abre con este gancho". Solo aplica cuando SÍ
+                    // hubo referral de Meta (no en resolución por mención de texto).
+                    'adId'            => $adId,
+                ];
             }
         }
 
@@ -919,7 +945,11 @@ private function handleAdvisorButtonResponse(
                 $resolution = (new ProductFinderService())->resolveStoreByMention($textBody);
 
                 if ($resolution['store'] || $resolution['ambiguousStores']) {
-                    return ['store' => $resolution['store'], 'ambiguousStores' => $resolution['ambiguousStores']];
+                    return [
+                        'store'           => $resolution['store'],
+                        'ambiguousStores' => $resolution['ambiguousStores'],
+                        'productId'       => $resolution['matchedProducts']->first()?->id,
+                    ];
                 }
             }
         }
@@ -931,11 +961,11 @@ private function handleAdvisorButtonResponse(
                 ->first();
 
             if ($conversation) {
-                return ['store' => $conversation->store, 'ambiguousStores' => null];
+                return ['store' => $conversation->store, 'ambiguousStores' => null, 'productId' => null];
             }
         }
 
-        return ['store' => null, 'ambiguousStores' => null];
+        return ['store' => null, 'ambiguousStores' => null, 'productId' => null];
     }
 
     /**

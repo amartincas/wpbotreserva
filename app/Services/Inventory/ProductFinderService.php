@@ -37,6 +37,14 @@ class ProductFinderService
     {
         $queryLower = strtolower(trim($query));
         $isGenericQuery = $this->isGenericQuery($queryLower);
+        // true cuando el cliente escribió algo ESPECÍFICO (no genérico) que no
+        // coincidió con ningún producto por nombre/descripción, y terminamos
+        // mostrando el catálogo completo de todos modos como último recurso.
+        // Sirve para advertirle a la IA que no asuma que ese catálogo es lo
+        // que el cliente pidió — a diferencia del fallback genérico normal
+        // (preguntas tipo "precio", "información"), acá sí hubo una búsqueda
+        // real que no encontró nada.
+        $isMismatchFallback = false;
 
         Log::info("PRODUCT_FINDER: Search Parameters", [
             'store_id' => $storeId,
@@ -98,6 +106,8 @@ class ProductFinderService
                     'original_query' => $query,
                 ]);
 
+                $isMismatchFallback = true;
+
                 $products = Product::where('store_id', $storeId)
                     ->with(['images', 'availableExtras'])
                     ->limit($limit)
@@ -125,6 +135,7 @@ class ProductFinderService
             'products' => $products,
             'hasServices' => $hasServices,
             'hasProducts' => $hasProducts,
+            'isMismatchFallback' => $isMismatchFallback,
         ];
     }
 
