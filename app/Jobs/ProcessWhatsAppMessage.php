@@ -722,10 +722,44 @@ class ProcessWhatsAppMessage implements ShouldQueue
                         'product_name' => $product->name,
                     ]);
 
+                    $this->rememberStickyProduct($product->id);
+
                     return [
                         'context' => $this->formatProductData($product),
                         'hasServices' => $product->type === 'service',
                         'hasProducts' => $product->type === 'product',
+                        'products' => collect([$product]),
+                        'isMismatchFallback' => false,
+                    ];
+                }
+            }
+
+            // Producto ya confirmado en un turno anterior de esta misma
+            // conversación (guardado en order_draft). Si el mensaje actual no
+            // menciona explícitamente OTRO producto del store, seguimos
+            // hablando del mismo en vez de re-buscar con el texto crudo del
+            // mensaje — un mensaje de seguimiento típico ("sí", un nombre,
+            // una dirección) no matchea ningún producto por texto y termina
+            // cayendo al fallback de catálogo completo, mostrando productos
+            // sin ninguna relación con lo que ya se venía hablando.
+            $stickyProductId = Cache::get("order_draft:{$this->store->id}:{$this->from}", [])['product_id'] ?? null;
+
+            if ($stickyProductId && !$this->messageMentionsDifferentProduct((int) $stickyProductId)) {
+                $stickyProduct = Product::with('images')->find($stickyProductId);
+
+                if ($stickyProduct) {
+                    Log::info("CONTEXT_RETRIEVAL: Reusing sticky product from order_draft", [
+                        'store_id' => $this->store->id,
+                        'product_id' => $stickyProduct->id,
+                        'product_name' => $stickyProduct->name,
+                    ]);
+
+                    return [
+                        'context' => $this->formatProductData($stickyProduct),
+                        'hasServices' => $stickyProduct->type === 'service',
+                        'hasProducts' => $stickyProduct->type === 'product',
+                        'products' => collect([$stickyProduct]),
+                        'isMismatchFallback' => false,
                     ];
                 }
             }
@@ -738,6 +772,13 @@ class ProcessWhatsAppMessage implements ShouldQueue
 
             $finder = new ProductFinderService();
             $result = $finder->findProductsWithTypes($this->messageBody, $this->store->id, 10);
+
+            // Si la búsqueda de este turno dio un match único y sin ambigüedad,
+            // lo recordamos como el producto "pegajoso" de la conversación para
+            // los próximos turnos.
+            if ($result['products']->count() === 1 && empty($result['isMismatchFallback'])) {
+                $this->rememberStickyProduct($result['products']->first()->id);
+            }
 
             // Ensure images are loaded for the found products
             $result['products']->load('images');
@@ -1247,9 +1288,49 @@ PROMPT;
             $merged[$field] = !empty($fresh) ? $fresh : $prevCached;
         }
 
+        // product_id lo escribe rememberStickyProduct() por separado (no viene
+        // de la extracción de la IA) — se preserva acá para que este merge no
+        // lo borre al reemplazar todo el valor cacheado.
+        if (!empty($cached['product_id'])) {
+            $merged['product_id'] = $cached['product_id'];
+        }
+
         Cache::put($draftKey, $merged, now()->addHours(4));
 
         return $merged;
+    }
+
+    /**
+     * Recuerda el producto "pegajoso" de la conversación actual — el que se
+     * debe seguir usando como contexto de catálogo en los próximos turnos
+     * mientras el cliente no mencione explícitamente uno distinto. Se guarda
+     * en el mismo caché de order_draft para no depender de un caché aparte.
+     */
+    private function rememberStickyProduct(int $productId): void
+    {
+        $draftKey = "order_draft:{$this->store->id}:{$this->from}";
+        $draft = Cache::get($draftKey, []);
+        $draft['product_id'] = $productId;
+        Cache::put($draftKey, $draft, now()->addHours(4));
+    }
+
+    /**
+     * Detecta si el mensaje actual menciona explícitamente, por nombre, un
+     * producto del store DISTINTO al producto pegajoso — señal de que el
+     * cliente cambió de tema y sí toca volver a buscar libremente.
+     */
+    private function messageMentionsDifferentProduct(int $excludeProductId): bool
+    {
+        $text = trim((string) $this->messageBody);
+
+        if ($text === '') {
+            return false;
+        }
+
+        return Product::where('store_id', $this->store->id)
+            ->where('id', '!=', $excludeProductId)
+            ->get(['id', 'name'])
+            ->contains(fn (Product $product) => filled($product->name) && mb_stripos($text, $product->name) !== false);
     }
 
     /**
