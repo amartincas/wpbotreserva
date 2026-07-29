@@ -451,6 +451,11 @@ class ProcessWhatsAppMessage implements ShouldQueue
                 // reserva de este cliente empiece desde cero.
                 Cache::forget("order_draft:{$this->store->id}:{$this->from}");
 
+                // Si este cliente llegó por un anuncio de Meta, reportar el
+                // Lead real vía Conversions API (no hace nada si no hay
+                // ctwa_clid guardado — lead orgánico, sin anuncio de por medio).
+                \App\Services\MetaConversionsApiService::reportLeadIfTracked($this->store->id, $this->from);
+
                 Log::info('Lead created from WhatsApp conversation', [
                     'store_id' => $this->store->id,
                     'customer_phone' => $this->from,

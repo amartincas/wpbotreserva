@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Model;
     'wa_phone_number_id',
     'wa_business_account_id',
     'wa_verify_token',
+    'meta_capi_dataset_id',
 ])]
 class WhatsAppPlatformSetting extends Model
 {

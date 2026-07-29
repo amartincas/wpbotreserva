@@ -76,6 +76,11 @@ class WhatsAppPlatformSettingsPage extends Page implements HasForms
                     ->helperText('Meta Developers > My Apps > System User Access Tokens.')
                     ->columnSpanFull(),
 
+                TextInput::make('meta_capi_dataset_id')
+                    ->label('Meta CAPI Dataset ID')
+                    ->helperText('Meta Events Manager > Data Sources — dataset conectado al WhatsApp Business Account. Se usa para reportar leads reales a los anuncios Click-to-WhatsApp.')
+                    ->columnSpanFull(),
+
                 Select::make('ai_provider')
                     ->label('AI Provider')
                     ->options([
@@ -139,6 +144,21 @@ class WhatsAppPlatformSettingsPage extends Page implements HasForms
 
                     Notification::make()
                         ->title($result['success'] ? '¡Conexión Exitosa!' : 'Connection Failed')
+                        ->body($result['message'])
+                        ->status($result['success'] ? 'success' : 'danger')
+                        ->send();
+                }),
+
+            Action::make('test_capi')
+                ->label('Test CAPI (Meta Leads)')
+                ->icon('heroicon-m-bolt')
+                ->color('gray')
+                ->tooltip('Envía un evento Lead de prueba a Meta con un ctwa_clid ficticio, solo para validar que el Dataset ID y el Access Token tienen los permisos correctos.')
+                ->action(function () {
+                    $result = \App\Services\MetaConversionsApiService::sendLeadEvent('TEST_' . now()->timestamp);
+
+                    Notification::make()
+                        ->title($result['success'] ? 'Evento de prueba enviado' : 'Falló el envío de prueba')
                         ->body($result['message'])
                         ->status($result['success'] ? 'success' : 'danger')
                         ->send();

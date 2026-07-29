@@ -186,6 +186,10 @@ class WhatsAppController extends Controller
         $store = $resolution['store'];
         $resolvedProductId = $resolution['productId'] ?? null;
         $resolvedAdId = $resolution['adId'] ?? null;
+
+        if (!empty($resolution['ctwaClid']) && $fromPhone) {
+            \App\Services\MetaConversionsApiService::rememberAdClick($store->id, $fromPhone, $resolution['ctwaClid']);
+        }
     }
 
     if (!$store) {
@@ -1014,6 +1018,11 @@ private function handleAdvisorButtonResponse(
     private function resolveStoreForCustomer(?string $fromPhone, ?string $type, array $message): array
     {
         $adId = $message['referral']['source_id'] ?? null;
+        // ID de clic de Meta para anuncios Click-to-WhatsApp — se usa para
+        // reportarle a Meta (Conversions API) cuando este cliente termina en
+        // un Lead real, y así el algoritmo del anuncio pueda optimizar hacia
+        // gente que de verdad pide cotización, no solo hacia quien escribe.
+        $ctwaClid = $message['referral']['ctwa_clid'] ?? null;
 
         if ($adId) {
             $resolution = (new ProductFinderService())->resolveStoreByAdId($adId);
@@ -1032,6 +1041,7 @@ private function handleAdvisorButtonResponse(
                     // anuncio X, abre con este gancho". Solo aplica cuando SÍ
                     // hubo referral de Meta (no en resolución por mención de texto).
                     'adId'            => $adId,
+                    'ctwaClid'        => $ctwaClid,
                 ];
             }
         }

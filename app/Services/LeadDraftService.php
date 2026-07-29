@@ -94,6 +94,11 @@ class LeadDraftService
 
         Cache::forget(self::draftKey($store, $customerPhone));
 
+        // Igual que en la creación automática — reporta el Lead a Meta
+        // Conversions API si este cliente llegó por un anuncio (CONVERTIR es
+        // precisamente el rescate manual para cuando el bot no lo creó solo).
+        MetaConversionsApiService::reportLeadIfTracked($store->id, $customerPhone);
+
         $notified = WhatsAppService::notifyAdvisorOfLead($store, $lead, $customerPhone, $draft);
 
         return [
