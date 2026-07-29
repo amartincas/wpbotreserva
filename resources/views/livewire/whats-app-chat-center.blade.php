@@ -166,9 +166,9 @@
                                     'comments'             => 'Comentarios adicionales',
                                 ];
                             @endphp
-                            <div style="margin-top: 10px; padding: 10px 12px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px;">
-                                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
-                                    <div style="flex: 1;">
+                            <div style="margin-top: 10px; padding: 10px 12px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; max-height: 140px; overflow-y: auto;">
+                                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                                    <div style="flex: 1; min-width: 200px;">
                                         <div style="font-size: 11px; font-weight: 700; color: #92400e; margin-bottom: 4px;">DATOS CAPTURADOS POR EL BOT (sin reserva creada aún)</div>
                                         <div style="display: flex; flex-wrap: wrap; gap: 6px;">
                                             @foreach ($draftLabels as $field => $label)
@@ -199,7 +199,7 @@
                     </div>
 
                     {{-- Messages --}}
-                    <div id="chat-container" wire:poll.5s="getMessageStatuses" style="flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                    <div id="chat-container" wire:poll.5s="getMessageStatuses" style="flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
                         @foreach ($messages as $message)
                             @php
                                 // Estilos por rol

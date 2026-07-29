@@ -208,8 +208,14 @@ class WhatsAppChatCenter extends Component
             // Datos acumulados por el bot aún sin convertir en Reserva formal
             // (ver botón "Crear Reserva" — mismo mecanismo que el comando
             // CONVERTIR del asesor por WhatsApp).
+            // IMPORTANTE: solo se muestra si todavía NO existe ningún Lead
+            // para este teléfono — la extracción de datos sigue corriendo en
+            // cada turno aunque el bot ya haya creado la reserva (para poder
+            // detectar una reserva NUEVA más adelante en la misma
+            // conversación), así que sin este chequeo la franja reaparecería
+            // después de que el bot ya la haya convertido automáticamente.
             $draftStore = Store::find($storeId);
-            $this->leadDraft = $draftStore
+            $this->leadDraft = ($draftStore && !$lead)
                 ? \App\Services\LeadDraftService::getDraft($draftStore, (string) $phone)
                 : [];
         } else {

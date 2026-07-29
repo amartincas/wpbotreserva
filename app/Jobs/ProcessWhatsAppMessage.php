@@ -360,8 +360,16 @@ class ProcessWhatsAppMessage implements ShouldQueue
             }
 
             // 5. Append system metadata (timestamps and completion signal)
+            // Nota: se fuerza America/Bogota explícitamente en vez de depender de now()/APP_TIMEZONE,
+            // porque no hay garantía de que el .env del servidor tenga APP_TIMEZONE configurado
+            // (el default de Laravel es UTC, lo que desfasaría el razonamiento de horario ~5 horas).
+            $localNow = now('America/Bogota');
+            $businessHours = $localNow->hour >= 8 && $localNow->hour < 19 && $localNow->dayOfWeek !== \Carbon\Carbon::SUNDAY;
+
             $systemPrompt .= "\n\n### SYSTEM METADATA:\n";
-            $systemPrompt .= "Current Date/Time: " . now()->format('Y-m-d H:i:s') . "\n";
+            $systemPrompt .= "Current Date/Time (America/Bogota): " . $localNow->translatedFormat('l d/m/Y H:i') . "\n";
+            $systemPrompt .= "Advisor business hours: Lunes a Sábado, 8:00am a 7:00pm (hora Colombia). Right now it is " . ($businessHours ? "WITHIN" : "OUTSIDE") . " business hours.\n";
+            $systemPrompt .= "When telling the customer when the advisor will contact them, be honest based on the current time above: if it's currently outside business hours (night, early morning, or Sunday), say the advisor will reach out the next business day, first thing — do NOT say things like 'en las próximas horas' or imply someone is available right now. If it's currently within business hours, it's fine to say it'll be soon / within the next few hours.\n";
             $systemPrompt .= "Lead Completion Signal: [LEAD_COMPLETE]\n";
             $systemPrompt .= "Before showing the final booking summary, ALWAYS ask the customer if there's anything else the advisor should know about their trip (optional — e.g. reduced mobility, dietary restrictions, traveling with children, medical conditions, special occasions). Make clear it's optional and they can say no. Wait for their answer (even if it's 'no' or 'nada') before showing the summary — do not skip this question.\n";
             $systemPrompt .= "ONLY append [LEAD_COMPLETE] when the customer has EXPLICITLY confirmed they want to move forward with the booking and are ready to be connected with an advisor to close payment (sí, confirmo, correcto, acepto, listo, dale, de acuerdo) AFTER you have asked about additional comments AND shown the full booking summary. Never emit this token before showing the summary. Never emit this token more than once per conversation unless the customer explicitly starts a NEW and SEPARATE booking after the previous one was already confirmed.\n";
@@ -975,7 +983,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
 
         try {
             // Build extraction prompt focusing on CURRENT context
-            $today = now()->format('Y-m-d (l)');
+            $today = now('America/Bogota')->format('Y-m-d (l)');
             $activeProductsLine = !empty($activeProductNames)
                 ? implode(', ', $activeProductNames)
                 : '(none matched for the current message)';
