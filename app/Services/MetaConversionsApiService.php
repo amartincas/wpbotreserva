@@ -70,8 +70,8 @@ class MetaConversionsApiService
     {
         $settings = WhatsAppPlatformSetting::current();
 
-        if (empty($settings->meta_capi_dataset_id) || empty($settings->wa_access_token)) {
-            $message = 'Dataset ID o Access Token no configurados en Configuración WhatsApp/IA.';
+        if (empty($settings->meta_capi_dataset_id) || empty($settings->wa_access_token) || empty($settings->wa_business_account_id)) {
+            $message = 'Dataset ID, Access Token o WABA ID no configurados en Configuración WhatsApp/IA.';
             Log::warning('META_CAPI: Envío omitido — falta configuración', ['message' => $message]);
 
             return ['success' => false, 'message' => $message];
@@ -88,6 +88,7 @@ class MetaConversionsApiService
                     'messaging_channel' => 'whatsapp',
                     'user_data' => [
                         'ctwa_clid' => $ctwaClid,
+                        'whatsapp_business_account_id' => $settings->wa_business_account_id,
                     ],
                 ]],
             ]);
