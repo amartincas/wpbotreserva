@@ -82,11 +82,13 @@ class MetaConversionsApiService
         try {
             $response = Http::withToken($settings->wa_access_token)->post($url, [
                 'data' => [[
-                    'event_name' => 'Lead',
+                    'event_name' => 'LeadSubmitted',
                     'event_time' => now()->timestamp,
                     'action_source' => 'business_messaging',
                     'messaging_channel' => 'whatsapp',
-                    'ctwa_clid' => $ctwaClid,
+                    'user_data' => [
+                        'ctwa_clid' => $ctwaClid,
+                    ],
                 ]],
             ]);
 
