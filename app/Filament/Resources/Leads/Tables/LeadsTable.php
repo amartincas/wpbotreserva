@@ -137,7 +137,7 @@ class LeadsTable
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
-                ]),
+                ])->visible(fn () => Auth::user()?->is_super_admin ?? false),
             ]);
     }
 }

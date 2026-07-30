@@ -23,6 +23,19 @@ class LeadResource extends Resource
 
     protected static ?string $navigationLabel = 'Leads';
 
+    // Los usuarios de agencia sí pueden crear/editar leads (es su trabajo
+    // diario: mover el pipeline, agregar recordatorios) — solo borrar queda
+    // restringido a superadmin, para no perder el historial por accidente.
+    public static function canDelete($record): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
