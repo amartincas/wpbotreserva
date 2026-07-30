@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Widgets\PipelineStatsWidget;
 use App\Filament\Widgets\UnprocessedLeadsStats;
 use BackedEnum;
 use Filament\Pages\Dashboard as BaseDashboard;
@@ -15,6 +16,7 @@ class Dashboard extends BaseDashboard
     public function getWidgets(): array
     {
         return [
+            PipelineStatsWidget::class,
             UnprocessedLeadsStats::class,
         ];
     }

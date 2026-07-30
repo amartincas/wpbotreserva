@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Enums\LeadLostReason;
+use App\Enums\LeadPipelineStage;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -25,6 +27,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'comments',
     'total_amount',
     'status',
+    'pipeline_stage',
+    'lost_reason',
     'summary',
     'is_processed',
     'bot_active',
@@ -69,12 +73,24 @@ class Lead extends Model
             'product_cost_price' => 'decimal:2',
             'extras_sale_total'  => 'decimal:2',
             'extras_cost_total'  => 'decimal:2',
+            'pipeline_stage'     => LeadPipelineStage::class,
+            'lost_reason'        => LeadLostReason::class,
         ];
     }
 
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
+    }
+
+    /**
+     * ID de negocio legible para el asesor (ej. BT-20260730-000241) — no
+     * reemplaza la PK autoincremental, solo la muestra en un formato más
+     * usable en el panel y en comunicaciones con el asesor.
+     */
+    public function businessId(): string
+    {
+        return 'BT-' . $this->created_at->format('Ymd') . '-' . str_pad((string) $this->id, 6, '0', STR_PAD_LEFT);
     }
 
     public function markAsProcessed(): void

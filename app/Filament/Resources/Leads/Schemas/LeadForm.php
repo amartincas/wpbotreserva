@@ -7,7 +7,10 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use App\Enums\LeadLostReason;
+use App\Enums\LeadPipelineStage;
 use App\Models\Lead;
 use Illuminate\Support\Facades\Auth;
 
@@ -82,6 +85,19 @@ class LeadForm
                         Lead::STATUS_CANCELADO => '❌ Cancelado',
                     ])
                     ->default(Lead::STATUS_PENDIENTE)
+                    ->helperText('Este campo dispara mensajes automáticos al cliente por WhatsApp — no confundir con la etapa de venta de abajo.')
+                    ->columnSpan(2),
+                Select::make('pipeline_stage')
+                    ->label('Etapa de Venta')
+                    ->options(LeadPipelineStage::options())
+                    ->default(LeadPipelineStage::NUEVO->value)
+                    ->live()
+                    ->helperText('Seguimiento interno del asesor — no envía nada al cliente.')
+                    ->columnSpan(2),
+                Select::make('lost_reason')
+                    ->label('Motivo de Pérdida')
+                    ->options(LeadLostReason::options())
+                    ->visible(fn (Get $get) => $get('pipeline_stage') === LeadPipelineStage::VENTA_PERDIDA->value)
                     ->columnSpan(2),
                 Textarea::make('summary')
                     ->label('Resumen de la Reserva')

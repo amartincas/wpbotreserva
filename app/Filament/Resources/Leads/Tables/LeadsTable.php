@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Leads\Tables;
 
+use App\Enums\LeadPipelineStage;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
@@ -43,12 +44,27 @@ class LeadsTable
                     ->label('Estado')
                     ->badge()
                     ->sortable(),
+                TextColumn::make('pipeline_stage')
+                    ->label('Etapa de Venta')
+                    ->badge()
+                    ->formatStateUsing(fn ($state) => $state instanceof LeadPipelineStage
+                        ? $state->label()
+                        : LeadPipelineStage::from($state)->label())
+                    ->color(fn ($state) => $state instanceof LeadPipelineStage
+                        ? $state->color()
+                        : LeadPipelineStage::from($state)->color())
+                    ->sortable(),
                 TextColumn::make('comision')
                     ->label('Comisión')
                     ->state(fn ($record) => $record->status === \App\Models\Lead::STATUS_CERRADO ? $record->getMargin() : null)
                     ->money('COP', locale: 'es_CO')
                     ->placeholder('—')
                     ->sortable(false),
+                TextColumn::make('business_id')
+                    ->label('ID')
+                    ->state(fn ($record) => $record->businessId())
+                    ->copyable()
+                    ->toggleable(),
                 TextColumn::make('created_at')
                     ->since()
                     ->sortable(),
@@ -65,6 +81,9 @@ class LeadsTable
                 SelectFilter::make('store_id')
                     ->relationship('store', 'name')
                     ->label('Store'),
+                SelectFilter::make('pipeline_stage')
+                    ->label('Etapa de Venta')
+                    ->options(LeadPipelineStage::options()),
             ])
             ->defaultSort('created_at', 'desc')
             ->recordActions([
