@@ -28,6 +28,12 @@ class CustomerLeadResource extends Resource
 
     protected static ?int $navigationSort = 1;
 
+    // Solo superadmin — el menú simplificado de agencias no incluye el CRM.
+    public static function canAccess(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();

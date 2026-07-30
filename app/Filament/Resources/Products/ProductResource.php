@@ -24,6 +24,35 @@ class ProductResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
+    protected static ?string $navigationLabel = 'Planes';
+
+    protected static ?string $modelLabel = 'Plan';
+
+    protected static ?string $pluralModelLabel = 'Planes';
+
+    // Un usuario de agencia (no superadmin) puede ver los planes de su
+    // propia agencia, pero no crear, editar ni borrar — el catálogo lo
+    // administra solo el equipo de BoTravel.
+    public static function canCreate(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canEdit($record): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canDelete($record): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();

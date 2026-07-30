@@ -28,6 +28,12 @@ class WhatsAppTemplateResource extends Resource
 
     protected static ?int $navigationSort = 2;
 
+    // Solo superadmin — el menú simplificado de agencias no incluye plantillas.
+    public static function canAccess(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();

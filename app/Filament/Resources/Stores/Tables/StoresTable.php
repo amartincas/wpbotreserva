@@ -16,14 +16,21 @@ class StoresTable
         return $table
             ->columns([
                 TextColumn::make('name')
+                    ->label('Nombre')
                     ->searchable(),
+                TextColumn::make('status')
+                    ->label('Estado')
+                    ->badge(),
                 TextColumn::make('personality_type')
+                    ->label('Tipo de Personalidad')
                     ->badge(),
                 TextColumn::make('created_at')
+                    ->label('Creado')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('updated_at')
+                    ->label('Actualizado')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),

@@ -24,6 +24,35 @@ class StoreResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::BuildingLibrary;
 
+    protected static ?string $navigationLabel = 'Agencia';
+
+    protected static ?string $modelLabel = 'Agencia';
+
+    protected static ?string $pluralModelLabel = 'Agencias';
+
+    // Un usuario de agencia (no superadmin) puede ver su propia agencia,
+    // pero no editarla, crearla ni borrarla — esa configuración la maneja
+    // solo el equipo de BoTravel.
+    public static function canCreate(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canEdit($record): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canDelete($record): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
+    public static function canDeleteAny(): bool
+    {
+        return Auth::user()?->is_super_admin ?? false;
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();

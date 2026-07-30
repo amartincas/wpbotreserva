@@ -18,22 +18,27 @@ class ProductsTable
         return $table
             ->columns([
                 TextColumn::make('store.name')
-                    ->label('Store Name')
+                    ->label('Agencia')
                     ->searchable()
                     ->visible(Auth::user()?->is_super_admin),
                 TextColumn::make('name')
+                    ->label('Nombre')
                     ->searchable(),
                 TextColumn::make('price')
+                    ->label('Precio')
                     ->money()
                     ->sortable(),
                 TextColumn::make('stock')
+                    ->label('Stock')
                     ->numeric()
                     ->sortable(),
                 TextColumn::make('created_at')
+                    ->label('Creado')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('updated_at')
+                    ->label('Actualizado')
                     ->dateTime()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -41,7 +46,7 @@ class ProductsTable
             ->filters([
                 SelectFilter::make('store_id')
                     ->relationship('store', 'name')
-                    ->label('Store'),
+                    ->label('Agencia'),
             ])
             ->recordActions([
                 ViewAction::make(),

@@ -14,10 +14,11 @@ class StoreForm
         return $schema
             ->schema([
                 TextInput::make('name')
+                    ->label('Nombre')
                     ->required(),
 
                 Select::make('status')
-                    ->label('Estado del Store')
+                    ->label('Estado de la Agencia')
                     ->options([
                         'active'   => '✅ Activo',
                         'inactive' => '⏸️ Inactivo',
@@ -27,6 +28,7 @@ class StoreForm
                     ->required()
                     ->helperText('Demo: simulación completa sin persistir reservas en BD'),
                 Select::make('personality_type')
+                    ->label('Tipo de Personalidad')
                     ->options(['vendedor' => 'Vendedor', 'soporte' => 'Soporte', 'asesor' => 'Asesor'])
                     ->required(),
                 Textarea::make('system_prompt')

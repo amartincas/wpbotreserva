@@ -34,17 +34,19 @@ class ProductForm
                     ->default(Auth::user()?->store_id),
 
                 TextInput::make('id')
-                    ->label('Product ID (for AI image references)')
+                    ->label('ID del Plan (para referencias de imágenes con IA)')
                     ->disabled()
                     ->dehydrated(false)
-                    ->formatStateUsing(fn ($record) => $record?->id ? "Use [IMG:{$record->id}] to show this product" : '(ID will be assigned after creation)')
-                    ->helperText('Reference this ID in system prompts or AI responses to display product images')
+                    ->formatStateUsing(fn ($record) => $record?->id ? "Usa [IMG:{$record->id}] para mostrar este plan" : '(el ID se asigna al crear)')
+                    ->helperText('Referencia este ID en prompts o respuestas de la IA para mostrar imágenes del plan')
                     ->columnSpanFull(),
 
                 TextInput::make('name')
+                    ->label('Nombre')
                     ->required(),
 
                 Textarea::make('description')
+                    ->label('Descripción')
                     ->required()
                     ->columnSpanFull(),
 
@@ -62,9 +64,10 @@ class ProductForm
                     ->helperText('Precio que se paga al operador/proveedor por este tour o producto'),
 
                 ToggleButtons::make('type')
+                    ->label('Tipo')
                     ->options([
-                        'product' => 'Product',
-                        'service' => 'Service',
+                        'product' => 'Producto',
+                        'service' => 'Servicio',
                     ])
                     ->default('product')
                     ->required()
@@ -76,28 +79,28 @@ class ProductForm
                     ->default(0)
                     ->label(function (Get $get): string {
                         return $get('type') === 'service'
-                            ? 'Availability (1 = Accepting Clients, 0 = Fully Booked)'
-                            : 'Stock Quantity';
+                            ? 'Disponibilidad (1 = Aceptando clientes, 0 = Cupo lleno)'
+                            : 'Cantidad en Stock';
                     })
                     ->helperText(function (Get $get): string {
                         return $get('type') === 'service'
-                            ? 'Enter 1 if accepting new clients, 0 if fully booked'
-                            : 'Enter the number of units in stock';
+                            ? 'Ingresa 1 si está aceptando nuevos clientes, 0 si el cupo está lleno'
+                            : 'Ingresa el número de unidades disponibles';
                     }),
 
                 Textarea::make('ai_sales_strategy')
-                    ->label('AI Sales Strategy')
-                    ->placeholder('How should the AI sell this product?...')
+                    ->label('Estrategia de Venta para la IA')
+                    ->placeholder('¿Cómo debería la IA vender este plan?...')
                     ->columnSpanFull(),
 
                 Textarea::make('faq_context')
-                    ->label('FAQ & Operational Context')
-                    ->placeholder('Rules, cities/destinations covered, guides, FAQs specific to this tour...')
+                    ->label('FAQ y Contexto Operativo')
+                    ->placeholder('Reglas, ciudades/destinos cubiertos, guías, preguntas frecuentes de este tour...')
                     ->columnSpanFull(),
 
                 TextInput::make('required_customer_info')
-                    ->label('Required Lead Data')
-                    ->placeholder('E.g., Full name, phone, meeting point, tour date...')
+                    ->label('Datos Obligatorios del Cliente')
+                    ->placeholder('Ej: nombre completo, teléfono, punto de encuentro, fecha del tour...')
                     ->columnSpanFull(),
 
                 TagsInput::make('meta_ad_ids')
@@ -156,16 +159,16 @@ class ProductForm
                     ->collapsible()
                     ->columnSpanFull(),
 
-                // === PRODUCT GALLERY ===
+                // === GALERÍA DE IMÁGENES DEL PLAN ===
                 FileUpload::make('images')
-                    ->label('Product Images')
+                    ->label('Imágenes del Plan')
                     ->multiple()
                     ->reorderable()
                     ->directory('products')
                     ->disk('public')
                     ->acceptedFileTypes(['image/jpeg', 'image/png', 'image/webp'])
                     ->maxSize(5120)
-                    ->helperText('Upload multiple images (JPG, PNG, WebP). The first image will be used as primary.')
+                    ->helperText('Sube varias imágenes (JPG, PNG, WebP). La primera se usa como principal.')
                     ->columnSpanFull()
                     ->formatStateUsing(fn ($record) => $record?->images()->pluck('image_path')->toArray() ?? [])
                     ->dehydrated(false),
