@@ -99,6 +99,11 @@ class LeadDraftService
         // precisamente el rescate manual para cuando el bot no lo creó solo).
         MetaConversionsApiService::reportLeadIfTracked($store->id, $customerPhone);
 
+        // Alimenta el CRM (CustomerLead) igual que la creación automática —
+        // antes de este fix, un lead rescatado manualmente no sumaba a
+        // total_orders/CLV del cliente en el CRM.
+        \App\Services\CustomerLeadService::registerOrderFromLead($store, $customerPhone, $lead, $draft);
+
         $notified = WhatsAppService::notifyAdvisorOfLead($store, $lead, $customerPhone, $draft);
 
         return [

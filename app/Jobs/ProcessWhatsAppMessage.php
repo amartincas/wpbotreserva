@@ -568,49 +568,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
      */
     private function registerOrderInCrm(\App\Models\Lead $lead, array $leadData): void
     {
-        try {
-            $customerLead = \App\Models\CustomerLead::where('store_id', $this->store->id)
-                ->where('customer_phone', $this->from)
-                ->first();
-
-            if (!$customerLead) {
-                Log::warning('CRM: CustomerLead no encontrado para registrar pedido', [
-                    'store_id' => $this->store->id,
-                    'phone'    => $this->from,
-                ]);
-                return;
-            }
-
-            // Actualizar nombre si la IA lo extrajo y el CRM no lo tiene
-            \App\Services\CustomerLeadService::updateCustomerName(
-                $customerLead,
-                $leadData['customer_name'] ?? null
-            );
-
-            // Capturar primer producto de interés
-            if ($lead->product_name) {
-                $product = \App\Models\Product::where('store_id', $this->store->id)
-                    ->where('name', 'like', '%' . $lead->product_name . '%')
-                    ->first();
-
-                if ($product) {
-                    \App\Services\CustomerLeadService::captureFirstProduct(
-                        $customerLead,
-                        $product->id
-                    );
-                }
-            }
-
-            // Registrar el pedido — actualiza CLV, total_orders, status
-            \App\Services\CustomerLeadService::registerOrder($customerLead, $lead);
-
-        } catch (\Exception $e) {
-            Log::error('CRM: Error al registrar pedido', [
-                'store_id' => $this->store->id,
-                'lead_id'  => $lead->id,
-                'error'    => $e->getMessage(),
-            ]);
-        }
+        \App\Services\CustomerLeadService::registerOrderFromLead($this->store, $this->from, $lead, $leadData);
     }
 
     private function resolveOrderSnapshot(array $leadData): array

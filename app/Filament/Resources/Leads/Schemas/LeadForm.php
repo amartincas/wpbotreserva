@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\Leads\Schemas;
 
+use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -111,6 +113,27 @@ class LeadForm
                     ->label('Bot Activo para este Cliente')
                     ->helperText('Desactiva para atención manual.')
                     ->default(true)
+                    ->columnSpanFull(),
+                Repeater::make('reminders')
+                    ->relationship()
+                    ->label('Recordatorios')
+                    ->schema([
+                        TextInput::make('note')
+                            ->label('Nota')
+                            ->placeholder('Ej: Llamar mañana, esperando pago...')
+                            ->required()
+                            ->columnSpan(2),
+                        DatePicker::make('due_at')
+                            ->label('Fecha')
+                            ->columnSpan(1),
+                        Toggle::make('is_done')
+                            ->label('Hecho')
+                            ->columnSpan(1),
+                    ])
+                    ->columns(4)
+                    ->addActionLabel('+ Agregar recordatorio')
+                    ->defaultItems(0)
+                    ->reorderable(false)
                     ->columnSpanFull(),
                 \Filament\Forms\Components\Placeholder::make('recent_conversation')
                     ->label('Conversación Reciente')

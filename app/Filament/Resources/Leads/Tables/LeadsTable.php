@@ -18,6 +18,9 @@ class LeadsTable
     public static function configure(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn ($query) => $query->withCount([
+                'reminders as pending_reminders_count' => fn ($q) => $q->where('is_done', false),
+            ]))
             ->columns([
                 TextColumn::make('store.name')
                     ->label('Store Name')
@@ -60,6 +63,12 @@ class LeadsTable
                     ->money('COP', locale: 'es_CO')
                     ->placeholder('—')
                     ->sortable(false),
+                TextColumn::make('pending_reminders_count')
+                    ->label('Recordatorios')
+                    ->badge()
+                    ->formatStateUsing(fn ($state) => $state > 0 ? "🔔 {$state}" : '—')
+                    ->color(fn ($state) => $state > 0 ? 'warning' : 'gray')
+                    ->sortable(),
                 TextColumn::make('business_id')
                     ->label('ID')
                     ->state(fn ($record) => $record->businessId())

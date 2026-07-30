@@ -146,6 +146,50 @@ class CustomerLeadService
     }
 
     /**
+     * Registra en el CRM el pedido/reserva que se acaba de crear en `leads` —
+     * actualiza nombre, primer producto de interés, y las métricas del
+     * CustomerLead (total_orders, CLV, status). Compartido entre la creación
+     * automática del bot y la conversión manual (comando CONVERTIR / botón
+     * del panel), para que ambos caminos alimenten el mismo CRM por igual.
+     */
+    public static function registerOrderFromLead(Store $store, string $customerPhone, Lead $lead, array $leadData): void
+    {
+        try {
+            $customerLead = CustomerLead::where('store_id', $store->id)
+                ->where('customer_phone', $customerPhone)
+                ->first();
+
+            if (!$customerLead) {
+                Log::warning('CRM: CustomerLead no encontrado para registrar pedido', [
+                    'store_id' => $store->id,
+                    'phone'    => $customerPhone,
+                ]);
+                return;
+            }
+
+            static::updateCustomerName($customerLead, $leadData['customer_name'] ?? null);
+
+            if ($lead->product_name) {
+                $product = Product::where('store_id', $store->id)
+                    ->where('name', 'like', '%' . $lead->product_name . '%')
+                    ->first();
+
+                if ($product) {
+                    static::captureFirstProduct($customerLead, $product->id);
+                }
+            }
+
+            static::registerOrder($customerLead, $lead);
+        } catch (\Exception $e) {
+            Log::error('CRM: Error al registrar pedido', [
+                'store_id' => $store->id,
+                'lead_id'  => $lead->id,
+                'error'    => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * Calcula métricas CRM para un store en un rango de fechas.
      */
     public static function calculateMetrics(int $storeId, $from = null, $to = null): array
