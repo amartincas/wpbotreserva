@@ -86,6 +86,7 @@ class LeadDraftService
             'tour_date'            => $draft['tour_date'] ?? null,
             'travelers_count'      => $draft['travelers_count'] ?? null,
             'product_service_name' => $draft['product_service_name'] ?? null,
+            'product_id'           => $draft['product_id'] ?? null,
             'comments'             => $draft['comments'] ?? null,
             'total_amount'         => $draft['total_amount'] ?? null,
             'summary'              => 'Reserva creada manualmente a partir de los datos acumulados en la conversación.',

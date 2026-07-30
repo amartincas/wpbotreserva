@@ -45,10 +45,6 @@ class LeadForm
                     ->tel()
                     ->required()
                     ->columnSpan(2),
-                Textarea::make('meeting_point')
-                    ->label('Punto de Encuentro / Referencia')
-                    ->rows(3)
-                    ->columnSpanFull(),
                 TextInput::make('origin_city')
                     ->label('Ciudad de Origen')
                     ->columnSpan(2),
@@ -61,8 +57,12 @@ class LeadForm
                     ->placeholder('Ej: después del 15 de agosto 2026')
                     ->helperText('Texto libre — el cliente rara vez da una fecha exacta')
                     ->columnSpan(2),
-                TextInput::make('product_service_name')
-                    ->label('Tour / Servicio (Destino)')
+                Select::make('product_id')
+                    ->label('Tour / Servicio (Plan)')
+                    ->options(fn (Get $get) => \App\Models\Product::where('store_id', $get('store_id'))
+                        ->pluck('name', 'id'))
+                    ->searchable()
+                    ->helperText('El nombre que ve el asesor y el cliente siempre coincide con el catálogo — no se puede escribir libre.')
                     ->columnSpan(2),
                 TextInput::make('total_amount')
                     ->label('Valor Total')

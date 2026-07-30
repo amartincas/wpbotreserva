@@ -19,6 +19,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'tour_date',
     'travelers_count',
     'product_service_name',
+    'product_id',
     'product_name',
     'product_sale_price',
     'product_cost_price',
@@ -86,12 +87,26 @@ class Lead extends Model
             if ($lead->isDirty('pipeline_stage')) {
                 $lead->pipeline_stage_changed_at = now();
             }
+
+            // El texto (product_service_name se usa en la plantilla de Meta
+            // y en reportes) siempre debe coincidir EXACTO con el nombre
+            // real del catálogo cuando hay un producto vinculado — nunca se
+            // edita a mano, se deriva del product_id.
+            if ($lead->isDirty('product_id') && $lead->product_id) {
+                $lead->product_service_name = Product::find($lead->product_id)?->name
+                    ?? $lead->product_service_name;
+            }
         });
     }
 
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
+    }
+
+    public function product(): BelongsTo
+    {
+        return $this->belongsTo(Product::class);
     }
 
     public function reminders(): HasMany

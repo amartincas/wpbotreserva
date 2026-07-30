@@ -435,6 +435,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
                     'tour_date'             => $leadData['tour_date'] ?? null,
                     'travelers_count'       => $leadData['travelers_count'] ?? null,
                     'product_service_name'  => $leadData['product_service_name'] ?? null,
+                    'product_id'            => $snapshot['product_id'],
                     'product_name'          => $snapshot['product_name'],
                     'product_sale_price'    => $snapshot['product_sale_price'],
                     'product_cost_price'    => $snapshot['product_cost_price'],
@@ -574,6 +575,7 @@ class ProcessWhatsAppMessage implements ShouldQueue
     private function resolveOrderSnapshot(array $leadData): array
     {
         $snapshot = [
+            'product_id'         => null,
             'product_name'       => null,
             'product_sale_price' => null,
             'product_cost_price' => null,
@@ -582,20 +584,39 @@ class ProcessWhatsAppMessage implements ShouldQueue
             'extras_cost_total'  => 0,
         ];
 
-        $productName = $leadData['product_service_name'] ?? null;
-        if (!$productName) {
-            return $snapshot;
+        // Prioridad 1: el producto "pegajoso" ya confirmado en la
+        // conversación (mismo caché que usa getProductContextWithTypes) —
+        // es un ID real, mucho más confiable que volver a adivinar por
+        // texto. Prioridad 2: fallback por LIKE sobre el texto que extrajo
+        // la IA, para conversaciones donde nunca se fijó un producto pegajoso.
+        $stickyProductId = Cache::get("order_draft:{$this->store->id}:{$this->from}", [])['product_id'] ?? null;
+
+        if ($stickyProductId) {
+            $product = \App\Models\Product::where('store_id', $this->store->id)
+                ->where('id', $stickyProductId)
+                ->with('availableExtras')
+                ->first();
+        } else {
+            $product = null;
         }
 
-        $product = \App\Models\Product::where('store_id', $this->store->id)
-            ->where('name', 'like', '%' . $productName . '%')
-            ->with('availableExtras')
-            ->first();
+        if (!$product) {
+            $productName = $leadData['product_service_name'] ?? null;
+            if (!$productName) {
+                return $snapshot;
+            }
+
+            $product = \App\Models\Product::where('store_id', $this->store->id)
+                ->where('name', 'like', '%' . $productName . '%')
+                ->with('availableExtras')
+                ->first();
+        }
 
         if (!$product) {
             return $snapshot;
         }
 
+        $snapshot['product_id']         = $product->id;
         $snapshot['product_name']       = $product->name;
         $snapshot['product_sale_price'] = $product->price;
         $snapshot['product_cost_price'] = $product->cost_price;
