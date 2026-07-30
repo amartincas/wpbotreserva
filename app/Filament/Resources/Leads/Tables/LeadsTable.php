@@ -8,6 +8,7 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Columns\ToggleColumn;
+use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
@@ -99,6 +100,21 @@ class LeadsTable
                 SelectFilter::make('pipeline_stage')
                     ->label('Etapa de Venta')
                     ->options(LeadPipelineStage::options()),
+                Filter::make('has_alert')
+                    ->label('Solo con alerta')
+                    ->toggle()
+                    ->query(fn ($query) => $query->where(function ($q) {
+                        $q->where(function ($q2) {
+                            $q2->where('pipeline_stage', LeadPipelineStage::NUEVO->value)
+                                ->where('pipeline_stage_changed_at', '<=', now()->subHours(24));
+                        })->orWhere(function ($q2) {
+                            $q2->where('pipeline_stage', LeadPipelineStage::COTIZACION_ENVIADA->value)
+                                ->where('pipeline_stage_changed_at', '<=', now()->subHours(72));
+                        })->orWhere(function ($q2) {
+                            $q2->where('pipeline_stage', LeadPipelineStage::NEGOCIANDO->value)
+                                ->where('pipeline_stage_changed_at', '<=', now()->subHours(72));
+                        });
+                    })),
             ])
             ->defaultSort('created_at', 'desc')
             ->recordActions([

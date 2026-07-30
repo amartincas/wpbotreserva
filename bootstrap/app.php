@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\CheckStoreActive;
 use App\Http\Middleware\CheckStoreSetup;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -14,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         // Register custom middleware
+        $middleware->append(CheckStoreActive::class);
         $middleware->append(CheckStoreSetup::class);
 
         // Exclude WhatsApp webhook routes from CSRF protection
