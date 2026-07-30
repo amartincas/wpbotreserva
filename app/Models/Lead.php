@@ -67,16 +67,26 @@ class Lead extends Model
     protected function casts(): array
     {
         return [
-            'is_processed'       => 'boolean',
-            'bot_active'         => 'boolean',
-            'extras_detail'      => 'array',
-            'product_sale_price' => 'decimal:2',
-            'product_cost_price' => 'decimal:2',
-            'extras_sale_total'  => 'decimal:2',
-            'extras_cost_total'  => 'decimal:2',
-            'pipeline_stage'     => LeadPipelineStage::class,
-            'lost_reason'        => LeadLostReason::class,
+            'is_processed'              => 'boolean',
+            'bot_active'                => 'boolean',
+            'extras_detail'             => 'array',
+            'product_sale_price'        => 'decimal:2',
+            'product_cost_price'        => 'decimal:2',
+            'extras_sale_total'         => 'decimal:2',
+            'extras_cost_total'         => 'decimal:2',
+            'pipeline_stage'            => LeadPipelineStage::class,
+            'lost_reason'               => LeadLostReason::class,
+            'pipeline_stage_changed_at' => 'datetime',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $lead) {
+            if ($lead->isDirty('pipeline_stage')) {
+                $lead->pipeline_stage_changed_at = now();
+            }
+        });
     }
 
     public function store(): BelongsTo
@@ -126,6 +136,38 @@ class Lead extends Model
     public static function statusMessage(string $status): ?string
     {
         return self::STATUS_MESSAGES[$status] ?? null;
+    }
+
+    /**
+     * Alerta simple de seguimiento — basada en cuánto tiempo lleva el lead
+     * sin moverse de su etapa actual (`pipeline_stage_changed_at`). Solo
+     * cubre las 3 situaciones pedidas, nada más:
+     *   - Nuevo sin contactar en 24h
+     *   - Cotización enviada sin seguimiento en 3 días
+     *   - Negociación detenida (3 días sin avanzar)
+     *
+     * @return array{label: string, color: string}|null
+     */
+    public function alert(): ?array
+    {
+        if (!$this->pipeline_stage_changed_at) {
+            return null;
+        }
+
+        $hoursStuck = $this->pipeline_stage_changed_at->diffInHours(now());
+
+        return match ($this->pipeline_stage) {
+            LeadPipelineStage::NUEVO => $hoursStuck >= 24
+                ? ['label' => '🟠 Sin contactar +24h', 'color' => 'warning']
+                : null,
+            LeadPipelineStage::COTIZACION_ENVIADA => $hoursStuck >= 72
+                ? ['label' => '🔴 Cotización sin seguimiento +3 días', 'color' => 'danger']
+                : null,
+            LeadPipelineStage::NEGOCIANDO => $hoursStuck >= 72
+                ? ['label' => '🟠 Negociación detenida', 'color' => 'warning']
+                : null,
+            default => null,
+        };
     }
 
     /**

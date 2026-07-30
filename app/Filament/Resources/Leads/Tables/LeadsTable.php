@@ -63,6 +63,12 @@ class LeadsTable
                     ->money('COP', locale: 'es_CO')
                     ->placeholder('—')
                     ->sortable(false),
+                TextColumn::make('alert')
+                    ->label('Alerta')
+                    ->state(fn ($record) => $record->alert()['label'] ?? null)
+                    ->badge()
+                    ->color(fn ($record) => $record->alert()['color'] ?? 'gray')
+                    ->placeholder('—'),
                 TextColumn::make('pending_reminders_count')
                     ->label('Recordatorios')
                     ->badge()
