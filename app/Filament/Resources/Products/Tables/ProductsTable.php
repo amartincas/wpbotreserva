@@ -50,12 +50,13 @@ class ProductsTable
             ])
             ->recordActions([
                 ViewAction::make(),
-                EditAction::make(),
+                EditAction::make()
+                    ->visible(fn () => Auth::user()?->is_super_admin ?? false),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
-                ]),
+                ])->visible(fn () => Auth::user()?->is_super_admin ?? false),
             ]);
     }
 }
