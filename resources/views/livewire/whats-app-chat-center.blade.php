@@ -211,7 +211,7 @@
                                     default      => ['justify' => 'flex-end',   'bg' => '#f3f4f6', 'label' => $message->role,    'labelColor' => '#6b7280'],
                                 };
                             @endphp
-                            <div style="display: flex; width: 100%; justify-content: {{ $roleConfig['justify'] }};">
+                            <div wire:key="msg-{{ $message->id }}" style="display: flex; width: 100%; justify-content: {{ $roleConfig['justify'] }};">
                                 <div style="max-width: 75%; padding: 0.6rem 1rem; border-radius: 12px; background: {{ $roleConfig['bg'] }}; box-shadow: 0 1px 1px rgba(0,0,0,0.1);">
                                     {{-- Label del rol --}}
                                     <div style="font-size: 10px; font-weight: 600; color: {{ $roleConfig['labelColor'] }}; margin-bottom: 3px;">
