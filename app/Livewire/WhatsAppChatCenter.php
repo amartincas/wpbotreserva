@@ -117,11 +117,17 @@ class WhatsAppChatCenter extends Component
                     ->orderBy('created_at', 'asc')
                     ->get();
                 
-                // Only update and dispatch scroll if the count changed
-                if (count($queryMessages) !== count($this->messages)) {
+                // Comparar por IDs, no solo por cantidad — dos conversaciones
+                // distintas pueden tener la misma cantidad de mensajes por
+                // coincidencia, y comparar solo el conteo dejaba pegados los
+                // mensajes de la conversación anterior al cambiar de chat.
+                $newIds = $queryMessages->pluck('id')->all();
+                $currentIds = collect($this->messages)->pluck('id')->all();
+
+                if ($newIds !== $currentIds) {
                     $this->messages = $queryMessages;
                     $this->dispatch('scroll-down');
-                    
+
                     Log::debug('loadConversations: Messages updated', [
                         'customer_phone' => $this->selectedPhone,
                         'message_count' => count($queryMessages),
