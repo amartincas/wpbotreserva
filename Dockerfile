@@ -60,11 +60,19 @@ USER www-data
 
 # ---- "app-dev": misma base, con Pest/Pint/etc — solo la usa el override de dev ----
 FROM php-base AS app-dev
+USER root
+# pcov: driver de cobertura de tests — liviano, solo dev, nunca en producción.
+RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+    && pecl install pcov \
+    && docker-php-ext-enable pcov \
+    && apk del .build-deps
 COPY --from=vendor-dev /app/vendor ./vendor
 COPY . .
 COPY --from=frontend /app/public/build ./public/build
+# vendor también queda escribible acá (solo en dev) — Pest/coverage/mutation
+# testing necesitan crear cache bajo vendor/pestphp/.../.temp.
 RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/framework/testing storage/logs \
-    && chown -R www-data:www-data storage bootstrap/cache
+    && chown -R www-data:www-data storage bootstrap/cache vendor
 USER www-data
 
 # ---- Nginx (static assets baked in, proxian a "app" para requests dinámicos) ----

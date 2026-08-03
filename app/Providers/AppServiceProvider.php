@@ -2,15 +2,19 @@
 
 namespace App\Providers;
 
+use App\Domain\Booking\AvailabilityCalculator;
+use App\Domain\Booking\BookingScheduler;
+use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
+use App\Domain\Booking\Contracts\BookingSchedulerInterface;
+use App\Livewire\WhatsAppChatCenter;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 use Livewire\Livewire;
-use App\Services\AI\GeminiService;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -19,7 +23,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(AvailabilityCalculatorInterface::class, AvailabilityCalculator::class);
+        $this->app->bind(BookingSchedulerInterface::class, BookingScheduler::class);
     }
 
     /**
@@ -27,7 +32,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        
+
         Schema::defaultStringLength(191);
 
         if (app()->environment('production') || env('FORCE_HTTPS')) {
@@ -37,7 +42,7 @@ class AppServiceProvider extends ServiceProvider
         $this->configureDefaults();
 
         // Register Livewire components
-        Livewire::component('whats-app-chat-center', \App\Livewire\WhatsAppChatCenter::class);
+        Livewire::component('whats-app-chat-center', WhatsAppChatCenter::class);
     }
 
     /**
