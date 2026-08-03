@@ -1,0 +1,126 @@
+name: wpbotreserva
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+    image: wpbotreserva-app:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - storage_data:/var/www/html/storage/app
+      - ./.env:/var/www/html/.env
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "SCRIPT_NAME=/ping SCRIPT_FILENAME=/ping REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: nginx
+    image: wpbotreserva-nginx:latest
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:80"
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE:-wpbotreserva}
+      MARIADB_USER: ${DB_USERNAME:-wpbotreserva}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-wpbotreserva}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-wpbotreserva_root}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - backup_data:/backups
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+    image: wpbotreserva-app:latest
+    restart: unless-stopped
+    env_file: .env
+    command: ["php", "artisan", "queue:work", "--tries=3", "--timeout=120", "--sleep=1"]
+    volumes:
+      - storage_data:/var/www/html/storage/app
+      - ./.env:/var/www/html/.env
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'queue:work' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+    image: wpbotreserva-app:latest
+    restart: unless-stopped
+    env_file: .env
+    command: ["php", "artisan", "schedule:work"]
+    volumes:
+      - storage_data:/var/www/html/storage/app
+      - ./.env:/var/www/html/.env
+      - backup_data:/backups
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'schedule:work' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mariadb_data:
+  redis_data:
+  storage_data:
+  backup_data:

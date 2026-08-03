@@ -1,0 +1,79 @@
+# Se carga automáticamente en dev (docker compose up). Nunca se usa en el VPS —
+# ahí se levanta con `docker compose -f docker-compose.yml up -d --build`.
+services:
+  # Las tres reusan la imagen "app-dev" (incluye Pest/Pint — nunca se
+  # construye ni se publica en el VPS, ver Dockerfile). Tag distinto de
+  # "wpbotreserva-app:latest" a propósito, para que un build de dev nunca
+  # pise el tag que efectivamente se despliega.
+  app:
+    build:
+      target: app-dev
+    image: wpbotreserva-app:dev
+    volumes:
+      - ./app:/var/www/html/app
+      - ./routes:/var/www/html/routes
+      - ./config:/var/www/html/config
+      - ./database:/var/www/html/database
+      - ./resources:/var/www/html/resources
+      - ./tests:/var/www/html/tests
+      - ./storage:/var/www/html/storage
+      - ./composer.json:/var/www/html/composer.json
+      - ./composer.lock:/var/www/html/composer.lock
+      - ./phpunit.xml:/var/www/html/phpunit.xml
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+
+  queue:
+    build:
+      target: app-dev
+    image: wpbotreserva-app:dev
+    volumes:
+      - ./app:/var/www/html/app
+      - ./routes:/var/www/html/routes
+      - ./config:/var/www/html/config
+      - ./database:/var/www/html/database
+      - ./storage:/var/www/html/storage
+
+  scheduler:
+    build:
+      target: app-dev
+    image: wpbotreserva-app:dev
+    volumes:
+      - ./app:/var/www/html/app
+      - ./routes:/var/www/html/routes
+      - ./config:/var/www/html/config
+      - ./database:/var/www/html/database
+      - ./storage:/var/www/html/storage
+
+  mariadb:
+    ports:
+      # 3306 ya está ocupado en esta máquina por otro contenedor (mysql_local,
+      # aparentemente el setup local viejo de este mismo proyecto) — se usa
+      # 3316 en el host para no chocar. Dentro de la red de Docker sigue siendo
+      # el puerto 3306 normal (mariadb:3306).
+      - "3316:3306"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    restart: unless-stopped
+    depends_on:
+      - mariadb
+    environment:
+      PMA_HOST: mariadb
+      PMA_USER: root
+      PMA_PASSWORD: ${DB_ROOT_PASSWORD:-wpbotreserva_root}
+    ports:
+      # 8080 ya está ocupado en esta máquina (phpmyadmin_local, otro proyecto).
+      - "8090:80"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # UI
+      - "1025:1025" # SMTP
