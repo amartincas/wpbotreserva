@@ -21,13 +21,14 @@ class BackupDatabase extends Command
         $connection = config('database.default');
         $config = config("database.connections.{$connection}");
 
-        if (!in_array($config['driver'] ?? null, ['mysql', 'mariadb'], true)) {
+        if (! in_array($config['driver'] ?? null, ['mysql', 'mariadb'], true)) {
             $this->warn("backup:database solo soporta mysql/mariadb, conexión actual: {$connection}. Nada que hacer.");
+
             return self::SUCCESS;
         }
 
         $directory = storage_path('app/backups');
-        if (!is_dir($directory)) {
+        if (! is_dir($directory)) {
             mkdir($directory, 0755, true);
         }
 
@@ -47,11 +48,12 @@ class BackupDatabase extends Command
             ->env(['MYSQL_PWD' => $config['password']])
             ->run($dumpCommand);
 
-        if (!$result->successful() || !file_exists($path) || filesize($path) === 0) {
+        if (! $result->successful() || ! file_exists($path) || filesize($path) === 0) {
             Log::error('BACKUP_FAILED: dump de base de datos falló', [
                 'error' => $result->errorOutput(),
             ]);
             $this->error('El backup falló — ver logs.');
+
             return self::FAILURE;
         }
 
