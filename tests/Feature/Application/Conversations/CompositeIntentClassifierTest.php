@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Event;
 function compositeFixtureMessage(): InboundMessage
 {
     return new InboundMessage(
+        messageId: 'wamid.msg-'.uniqid(),
         phoneNumberId: 'wamid-composite',
         fromPhone: '+573001234567',
         text: 'hola',

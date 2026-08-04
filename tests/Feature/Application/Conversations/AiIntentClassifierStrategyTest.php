@@ -13,6 +13,7 @@ use App\Enums\ChannelType;
 function aiClassifierFixtureMessage(string $text): InboundMessage
 {
     return new InboundMessage(
+        messageId: 'wamid.msg-'.uniqid(),
         phoneNumberId: 'wamid-ai-classifier',
         fromPhone: '+573001234567',
         text: $text,

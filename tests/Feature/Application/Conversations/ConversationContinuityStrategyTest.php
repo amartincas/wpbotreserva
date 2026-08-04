@@ -12,6 +12,7 @@ use App\Enums\ChannelType;
 function continuityFixtureMessage(string $text = 'cualquier cosa'): InboundMessage
 {
     return new InboundMessage(
+        messageId: 'wamid.msg-'.uniqid(),
         phoneNumberId: 'wamid-continuity',
         fromPhone: '+573001234567',
         text: $text,

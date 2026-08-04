@@ -20,7 +20,7 @@ use Illuminate\Support\Facades\Event;
 
 function routerFixtureMessage(string $phoneNumberId, string $text = 'hola'): InboundMessage
 {
-    return new InboundMessage($phoneNumberId, '+573001234567', $text, now()->toImmutable());
+    return new InboundMessage('wamid.msg-'.uniqid(), $phoneNumberId, '+573001234567', $text, now()->toImmutable());
 }
 
 /**

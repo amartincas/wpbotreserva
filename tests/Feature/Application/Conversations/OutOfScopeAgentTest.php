@@ -33,7 +33,7 @@ test('envía un mensaje de bienvenida/orientación a través de NotificationSend
     ]);
     $org = Organization::create(['name' => 'Barbería Don Carlos']);
     $session = ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']);
-    $message = new InboundMessage('wamid-oos', '+573001234567', 'asdkjhaskjd', now()->toImmutable());
+    $message = new InboundMessage('wamid.msg-oos', 'wamid-oos', '+573001234567', 'asdkjhaskjd', now()->toImmutable());
 
     (new OutOfScopeAgent(outOfScopeFakeSender($calls)))->handle($message, $session, $org);
 

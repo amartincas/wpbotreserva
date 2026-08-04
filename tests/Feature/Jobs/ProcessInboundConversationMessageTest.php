@@ -18,9 +18,12 @@ beforeEach(function () {
     Config::set('cache.default', 'redis');
 });
 
-function lockTestMessage(string $phoneNumberId = 'wamid-lock-test'): InboundMessage
+function lockTestMessage(string $phoneNumberId = 'wamid-lock-test', ?string $messageId = null): InboundMessage
 {
-    return new InboundMessage($phoneNumberId, '+573001234567', 'hola', now()->toImmutable());
+    // messageId único por defecto — evita que el dedup de Cache::add()
+    // filtrado por Redis (no se resetea entre tests, a diferencia de la BD
+    // con RefreshDatabase) haga que un test contamine al siguiente.
+    return new InboundMessage($messageId ?? 'wamid.msg-'.uniqid(), $phoneNumberId, '+573001234567', 'hola', now()->toImmutable());
 }
 
 test('Cache::lock de Redis es realmente exclusivo entre dos adquisiciones de la misma clave', function () {
@@ -68,4 +71,32 @@ test('si otro proceso ya tiene el lock de la conversación, el Job nunca ejecuta
     } finally {
         $externalLock->release();
     }
+});
+
+test('si Meta reenvía el mismo message_id, el segundo intento es un no-op y nunca llega al Router', function () {
+    // messageId único por ejecución (no un literal fijo): la clave de
+    // dedup vive en Redis, que no se resetea entre corridas de test como sí
+    // hace la BD con RefreshDatabase — un literal fijo colisionaría con la
+    // clave que dejó una corrida anterior de este mismo test.
+    $message = lockTestMessage(messageId: 'wamid.msg-dedup-test-'.uniqid());
+    $router = Mockery::mock(InboundMessageRouter::class);
+    $router->shouldReceive('handle')->once()->with($message);
+    App::instance(InboundMessageRouter::class, $router);
+
+    (new ProcessInboundConversationMessage($message))->handle(app(InboundMessageRouter::class));
+    // Segunda entrega del webhook con el mismo message_id (reenvío de Meta) —
+    // Mockery hace fallar el test si handle() se llamara una segunda vez.
+    (new ProcessInboundConversationMessage($message))->handle(app(InboundMessageRouter::class));
+});
+
+test('dos mensajes con message_id distinto se procesan ambos, sin deduplicarse entre sí', function () {
+    $messageA = lockTestMessage(phoneNumberId: 'wamid-dedup-a', messageId: 'wamid.msg-dedup-a-'.uniqid());
+    $messageB = lockTestMessage(phoneNumberId: 'wamid-dedup-b', messageId: 'wamid.msg-dedup-b-'.uniqid());
+    $router = Mockery::mock(InboundMessageRouter::class);
+    $router->shouldReceive('handle')->once()->with($messageA);
+    $router->shouldReceive('handle')->once()->with($messageB);
+    App::instance(InboundMessageRouter::class, $router);
+
+    (new ProcessInboundConversationMessage($messageA))->handle(app(InboundMessageRouter::class));
+    (new ProcessInboundConversationMessage($messageB))->handle(app(InboundMessageRouter::class));
 });
