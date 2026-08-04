@@ -2,6 +2,7 @@
 
 namespace App\Application\Notifications;
 
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Exceptions\NotificationDeliveryException;
 use App\Domain\Tenancy\Organization;
@@ -10,9 +11,11 @@ use App\Enums\ChannelType;
 
 /**
  * Implementación real para el MVP — resuelve el Channel de WhatsApp de la
- * organización (Parte XVI) y valida que esté en condiciones de recibir un
- * envío. La comunicación con Meta en sí está encapsulada en
- * MetaWhatsAppClient — esta clase no arma payloads ni conoce la Graph API.
+ * organización (Parte XVI) y valida que esté en condiciones genéricas de
+ * recibir un envío (existe, está activo). Depende de ChannelClientInterface,
+ * no de MetaWhatsAppClient concreto: el día que exista otro proveedor de
+ * WhatsApp (360dialog, Twilio) o incluso otro canal (Telegram, con su
+ * propio sender), esta clase no cambia — solo el binding en el contenedor.
  *
  * Nunca usa el `Store`/`WhatsAppPlatformSetting` del bot de turismo — esa
  * dependencia habría acoplado el dominio nuevo al viejo justo donde más
@@ -24,7 +27,7 @@ use App\Enums\ChannelType;
  */
 class WhatsAppNotificationSender implements NotificationSenderInterface
 {
-    public function __construct(private readonly MetaWhatsAppClient $client) {}
+    public function __construct(private readonly ChannelClientInterface $client) {}
 
     public function send(Organization $organization, string $toPhoneE164, string $message): void
     {
@@ -44,12 +47,6 @@ class WhatsAppNotificationSender implements NotificationSenderInterface
             );
         }
 
-        $accessToken = $channel->credentials['access_token'] ?? null;
-
-        if (! $accessToken || ! $channel->phone_number_id) {
-            throw new NotificationDeliveryException("El canal #{$channel->id} no tiene credenciales completas.");
-        }
-
-        $this->client->sendTextMessage($channel->phone_number_id, $accessToken, $toPhoneE164, $message);
+        $this->client->sendTextMessage($channel, $toPhoneE164, $message);
     }
 }

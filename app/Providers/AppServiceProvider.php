@@ -3,9 +3,11 @@
 namespace App\Providers;
 
 use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
+use App\Application\Notifications\MetaWhatsAppClient;
 use App\Application\Notifications\WhatsAppNotificationSender;
 use App\Domain\Booking\AvailabilityCalculator;
 use App\Domain\Booking\BookingScheduler;
@@ -33,6 +35,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(AvailabilityCalculatorInterface::class, AvailabilityCalculator::class);
         $this->app->bind(BookingSchedulerInterface::class, BookingScheduler::class);
         $this->app->bind(NotificationSenderInterface::class, WhatsAppNotificationSender::class);
+        $this->app->bind(ChannelClientInterface::class, MetaWhatsAppClient::class);
         $this->app->bind(EntitlementCheckerInterface::class, UnlimitedEntitlementChecker::class);
     }
 
