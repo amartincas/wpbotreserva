@@ -32,8 +32,8 @@ final class OrganizationResolution
         return new self(OrganizationResolutionStatus::PendingDisambiguation, candidates: $candidates);
     }
 
-    public static function notFound(): self
+    public static function unregistered(): self
     {
-        return new self(OrganizationResolutionStatus::NotFound);
+        return new self(OrganizationResolutionStatus::Unregistered);
     }
 }

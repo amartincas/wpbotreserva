@@ -3,6 +3,7 @@
 use App\Application\Channels\PhoneNumberIdChannelResolver;
 use App\Application\Contracts\AgentInterface;
 use App\Application\Contracts\IntentClassifierInterface;
+use App\Application\Contracts\OrganizationlessAgentInterface;
 use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\InboundMessageRouter;
@@ -54,6 +55,19 @@ function routerFixtureAgent(array &$calls): AgentInterface
     };
 }
 
+function routerFixtureOrganizationlessAgent(array &$calls): OrganizationlessAgentInterface
+{
+    return new class($calls) implements OrganizationlessAgentInterface
+    {
+        public function __construct(private array &$calls) {}
+
+        public function handle(InboundMessage $message, ConversationSession $session): void
+        {
+            $this->calls[] = compact('message', 'session');
+        }
+    };
+}
+
 function buildRouter(Intent $intent, array &$agentCalls, ?array $agentsByIntent = null): InboundMessageRouter
 {
     $agentsByIntent ??= [$intent->value => routerFixtureAgent($agentCalls)];
@@ -95,7 +109,7 @@ test('rechaza el mensaje si el Channel existe pero no está activo', function ()
     expect($calls)->toBeEmpty();
 });
 
-test('rechaza el mensaje si el Channel no tiene ninguna organización vinculada', function () {
+test('Channel sin organización vinculada (Unregistered) rechaza un Intent que requiere Organization', function () {
     Event::fake([InboundMessageRejected::class]);
     Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
@@ -104,12 +118,37 @@ test('rechaza el mensaje si el Channel no tiene ninguna organización vinculada'
         'status' => ChannelStatus::ACTIVE,
     ]);
     $calls = [];
+    // Intent::Reserva mapea a un Agent normal (AgentInterface) que exige
+    // Organization — sin ella, AgentSelector no devuelve invoker.
     $router = buildRouter(Intent::Reserva, $calls);
 
     $router->handle(routerFixtureMessage('wamid-router-noorg'));
 
-    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'organization_not_found');
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'agent_not_available');
     expect($calls)->toBeEmpty();
+});
+
+test('Channel sin organización vinculada (Unregistered) sí delega en un OrganizationlessAgentInterface, con organización null', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-router-registro',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $calls = [];
+    $agent = routerFixtureOrganizationlessAgent($calls);
+    $router = buildRouter(Intent::RegistroNegocio, $calls, agentsByIntent: [Intent::RegistroNegocio->value => $agent]);
+
+    $message = routerFixtureMessage('wamid-router-registro', 'quiero registrar mi negocio');
+    $router->handle($message);
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['message'])->toBe($message);
+    expect($calls[0]['session']->channel_id)->toBe($channel->id);
+
+    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
+    expect($session->organization_id)->toBeNull();
+    expect($session->current_intent)->toBe('registro_negocio');
 });
 
 test('rechaza el mensaje si el Channel tiene varias organizaciones y ninguna está resuelta en la sesión', function () {
@@ -197,7 +236,7 @@ test('en el segundo mensaje de la misma conversación, reutiliza la organizació
 
     // Se desvincula el channel de la organización a propósito: si el
     // segundo mensaje volviera a resolver por el pivot, ahora daría
-    // NotFound. Que siga funcionando prueba el shortcut de continuidad.
+    // Unregistered. Que siga funcionando prueba el shortcut de continuidad.
     $channel->organizations()->detach($org->id);
 
     $router->handle(routerFixtureMessage('wamid-router-continuity', 'segundo mensaje'));

@@ -11,9 +11,11 @@ use App\Domain\Tenancy\Organization;
  * Implementación MVP (Parte XIV) — si la sesión ya tiene una organización
  * resuelta de un mensaje anterior, la reutiliza sin volver a consultar el
  * pivot (evita un join en cada mensaje). Si no, resuelve por cantidad de
- * organizaciones vinculadas al Channel: 1 = resuelta directo, 0 = no
- * encontrada, 2+ = pendiente de desambiguación (el matching por nombre real
- * es roadmap — Parte XIV — disparado por un segundo piloto activo).
+ * organizaciones vinculadas al Channel: 1 = resuelta directo, 0 = todavía
+ * sin registrar (estado inicial normal de todo Channel nuevo, no un error
+ * — dispara el flujo de RegistroNegocioAgent), 2+ = pendiente de
+ * desambiguación (el matching por nombre real es roadmap — Parte XIV —
+ * disparado por un segundo piloto activo).
  */
 class SingleOrganizationResolver implements OrganizationResolverInterface
 {
@@ -30,7 +32,7 @@ class SingleOrganizationResolver implements OrganizationResolverInterface
         $candidates = $channel->organizations()->get();
 
         return match ($candidates->count()) {
-            0 => OrganizationResolution::notFound(),
+            0 => OrganizationResolution::unregistered(),
             1 => OrganizationResolution::resolved($candidates->first()),
             default => OrganizationResolution::pendingDisambiguation($candidates->all()),
         };

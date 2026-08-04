@@ -32,13 +32,13 @@ test('resuelve directo cuando el Channel tiene exactamente una organización vin
     expect($resolution->organization->is($org))->toBeTrue();
 });
 
-test('devuelve NotFound cuando el Channel no tiene ninguna organización vinculada', function () {
+test('devuelve Unregistered cuando el Channel no tiene ninguna organización vinculada', function () {
     $channel = orgResolverFixtureChannel();
     $session = ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']);
 
     $resolution = (new SingleOrganizationResolver)->resolve($channel, $session);
 
-    expect($resolution->status)->toBe(OrganizationResolutionStatus::NotFound);
+    expect($resolution->status)->toBe(OrganizationResolutionStatus::Unregistered);
     expect($resolution->organization)->toBeNull();
 });
 

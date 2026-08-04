@@ -14,10 +14,19 @@ use App\Domain\Conversational\InboundMessage;
  * Orquestador puro (Parte XIII, validado antes del Hito 4): recibe un
  * mensaje ya normalizado, secuencia las resoluciones de Channel/Organization/
  * ConversationSession, delega la clasificación y la selección del agente, y
- * termina en handle() del Agent — nunca invoca un Application Command
- * directamente ni interpreta contenido del mensaje. Los únicos condicionales
- * acá son guardas de flujo sobre resultados ya resueltos por sus
- * colaboradores, nunca sobre el contenido del mensaje.
+ * termina en handle() de un AgentInvoker — nunca invoca un Application
+ * Command directamente ni interpreta contenido del mensaje. Los únicos
+ * condicionales acá son guardas de flujo sobre resultados ya resueltos por
+ * sus colaboradores, nunca sobre el contenido del mensaje.
+ *
+ * Corrección post-Hito 4 (Hito 5): Unregistered ya no rechaza el mensaje —
+ * es el estado inicial normal de todo Channel antes de su primer registro,
+ * no un error, y el flujo de alta de negocio (RegistroNegocioAgent) tiene
+ * que poder arrancar justo ahí. El Router sigue el mismo camino siempre
+ * (clasificar → registrar Intent → seleccionar invoker → delegar) con
+ * $organization en null cuando corresponda — nunca sabe que Organization
+ * puede faltar ni que existen dos tipos de Agent; esa decisión vive
+ * enteramente en AgentSelector.
  *
  * Asume que ya se serializó el procesamiento de esta conversación (mutex de
  * Redis en el Job que lo invoca, Hito 7) — no adquiere locks acá.
@@ -52,12 +61,6 @@ class InboundMessageRouter
 
         $resolution = $this->organizations->resolve($channel, $session);
 
-        if ($resolution->status === OrganizationResolutionStatus::NotFound) {
-            InboundMessageRejected::dispatch($message, 'organization_not_found');
-
-            return;
-        }
-
         if ($resolution->status === OrganizationResolutionStatus::PendingDisambiguation) {
             // Desambiguación interactiva real es roadmap (Parte XIV,
             // disparador: segundo piloto activo) — hoy se rechaza de forma
@@ -67,20 +70,25 @@ class InboundMessageRouter
             return;
         }
 
-        $organization = $resolution->organization;
-        $this->sessions->attachOrganization($session, $organization);
+        $organization = $resolution->status === OrganizationResolutionStatus::Resolved
+            ? $resolution->organization
+            : null;
+
+        if ($organization !== null) {
+            $this->sessions->attachOrganization($session, $organization);
+        }
 
         $intent = $this->classifier->classify($message, $session);
         $this->sessions->recordIntent($session, $intent);
 
-        $agent = $this->agentSelector->selectFor($intent);
+        $invoker = $this->agentSelector->selectFor($intent, $organization);
 
-        if ($agent === null) {
+        if ($invoker === null) {
             InboundMessageRejected::dispatch($message, 'agent_not_available');
 
             return;
         }
 
-        $agent->handle($message, $session, $organization);
+        $invoker->handle($message, $session);
     }
 }
