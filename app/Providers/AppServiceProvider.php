@@ -6,17 +6,20 @@ use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
 use App\Application\Channels\PhoneNumberIdChannelResolver;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\ChannelResolverInterface;
+use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\IntentClassifierInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
+use App\Application\Conversations\Agents\RegistroNegocioAgent;
 use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\Classification\AiIntentClassifierStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\EloquentConversationSessionRepository;
+use App\Application\Conversations\Flows\CacheConversationDraftRepository;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
 use App\Application\Notifications\MetaWhatsAppClient;
 use App\Application\Notifications\WhatsAppNotificationSender;
@@ -58,6 +61,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(ChannelResolverInterface::class, PhoneNumberIdChannelResolver::class);
         $this->app->bind(OrganizationResolverInterface::class, SingleOrganizationResolver::class);
         $this->app->bind(ConversationSessionRepositoryInterface::class, EloquentConversationSessionRepository::class);
+        $this->app->bind(ConversationDraftRepositoryInterface::class, CacheConversationDraftRepository::class);
 
         // Credenciales de IA propias de la plataforma (no las de un negocio,
         // ver config/services.php) — App\Contracts\AiServiceInterface es la
@@ -94,6 +98,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(AgentSelector::class, function () {
             return new AgentSelector([
                 Intent::FueraDeAlcance->value => $this->app->make(OutOfScopeAgent::class),
+                Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
             ]);
         });
     }
