@@ -35,7 +35,11 @@ class Channel extends Model
             'provider' => ChannelProvider::class,
             'channel_type' => ChannelType::class,
             'status' => ChannelStatus::class,
-            'credentials' => 'encrypted',
+            // Estructurado (Parte XVI: "la forma interna depende del provider,
+            // validada en código vía un cast") — para meta_cloud_api guarda
+            // ['access_token' => ..., 'verify_token' => ...]. Completa la
+            // decisión de Hito 1; el ajuste es solo de cast, no de esquema.
+            'credentials' => 'encrypted:array',
             'metadata' => 'array',
         ];
     }
