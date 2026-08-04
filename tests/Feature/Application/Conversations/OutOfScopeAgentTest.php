@@ -1,0 +1,44 @@
+<?php
+
+use App\Application\Contracts\NotificationSenderInterface;
+use App\Application\Conversations\Agents\OutOfScopeAgent;
+use App\Domain\Conversational\ConversationSession;
+use App\Domain\Conversational\InboundMessage;
+use App\Domain\Tenancy\Channel;
+use App\Domain\Tenancy\Organization;
+use App\Enums\ChannelProvider;
+use App\Enums\ChannelStatus;
+use App\Enums\ChannelType;
+
+function outOfScopeFakeSender(array &$calls): NotificationSenderInterface
+{
+    return new class($calls) implements NotificationSenderInterface
+    {
+        public function __construct(private array &$calls) {}
+
+        public function send(Organization $organization, string $toPhoneE164, string $message): void
+        {
+            $this->calls[] = compact('organization', 'toPhoneE164', 'message');
+        }
+    };
+}
+
+test('envía un mensaje de bienvenida/orientación a través de NotificationSenderInterface', function () {
+    $calls = [];
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-oos',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    $session = ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']);
+    $message = new InboundMessage('wamid-oos', '+573001234567', 'asdkjhaskjd', now()->toImmutable());
+
+    (new OutOfScopeAgent(outOfScopeFakeSender($calls)))->handle($message, $session, $org);
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['organization']->is($org))->toBeTrue();
+    expect($calls[0]['toPhoneE164'])->toBe('+573001234567');
+    expect($calls[0]['message'])->not->toBeEmpty();
+});

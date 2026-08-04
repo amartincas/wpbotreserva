@@ -35,4 +35,23 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Intent Classifier (WpbotReserva, Hito 4)
+    |--------------------------------------------------------------------------
+    |
+    | Credenciales de IA propias de la plataforma para clasificar mensajes
+    | entrantes (AiIntentClassifierStrategy) — deliberadamente distintas de
+    | las credenciales de IA que cada Store del bot de turismo trae por su
+    | cuenta (ai_provider/ai_api_key en stores). WpbotReserva clasifica con
+    | su propia cuenta, nunca con la del negocio.
+    |
+    */
+
+    'intent_classifier' => [
+        'provider' => env('INTENT_CLASSIFIER_AI_PROVIDER', 'openai'),
+        'model' => env('INTENT_CLASSIFIER_AI_MODEL', 'gpt-4o-mini'),
+        'key' => env('INTENT_CLASSIFIER_AI_API_KEY'),
+    ],
+
 ];

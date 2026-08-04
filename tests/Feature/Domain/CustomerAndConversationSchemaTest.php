@@ -3,7 +3,11 @@
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\CRM\Customer;
 use App\Domain\Shared\PhoneNumber;
+use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
+use App\Enums\ChannelProvider;
+use App\Enums\ChannelStatus;
+use App\Enums\ChannelType;
 use Illuminate\Database\QueryException;
 
 test('PhoneNumber Value Object valida formato E.164', function () {
@@ -53,12 +57,51 @@ test('el mismo teléfono puede ser un customer distinto en otra organization', f
     expect($second->exists)->toBeTrue();
 });
 
-test('conversation_session nace sin organization resuelta y es única por teléfono', function () {
-    $session = ConversationSession::create(['customer_phone' => '+573001234567']);
+test('conversation_session nace sin organization resuelta y es única por (channel, teléfono)', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-schema-test',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+
+    $session = ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']);
 
     expect($session->organization_id)->toBeNull();
-    expect($session->current_agent)->toBeNull();
+    expect($session->current_intent)->toBeNull();
 
-    expect(fn () => ConversationSession::create(['customer_phone' => '+573001234567']))
+    expect(fn () => ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']))
         ->toThrow(QueryException::class);
+});
+
+test('conversation_session expone su channel', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-schema-test-relation',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $session = ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']);
+
+    expect($session->channel->is($channel))->toBeTrue();
+});
+
+test('un mismo teléfono puede tener una conversation_session distinta por cada channel (Parte XVI)', function () {
+    $channelA = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-schema-test-a',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $channelB = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-schema-test-b',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+
+    ConversationSession::create(['channel_id' => $channelA->id, 'customer_phone' => '+573001234567']);
+    $second = ConversationSession::create(['channel_id' => $channelB->id, 'customer_phone' => '+573001234567']);
+
+    expect($second->exists)->toBeTrue();
 });
