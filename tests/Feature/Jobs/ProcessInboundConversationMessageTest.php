@@ -100,3 +100,16 @@ test('dos mensajes con message_id distinto se procesan ambos, sin deduplicarse e
     (new ProcessInboundConversationMessage($messageA))->handle(app(InboundMessageRouter::class));
     (new ProcessInboundConversationMessage($messageB))->handle(app(InboundMessageRouter::class));
 });
+
+test('el mismo message_id en dos Channels distintos no se deduplica entre sí — no se asume unicidad global', function () {
+    $sharedMessageId = 'wamid.msg-'.uniqid();
+    $messageChannelA = lockTestMessage(phoneNumberId: 'wamid-shared-id-a', messageId: $sharedMessageId);
+    $messageChannelB = lockTestMessage(phoneNumberId: 'wamid-shared-id-b', messageId: $sharedMessageId);
+    $router = Mockery::mock(InboundMessageRouter::class);
+    $router->shouldReceive('handle')->once()->with($messageChannelA);
+    $router->shouldReceive('handle')->once()->with($messageChannelB);
+    App::instance(InboundMessageRouter::class, $router);
+
+    (new ProcessInboundConversationMessage($messageChannelA))->handle(app(InboundMessageRouter::class));
+    (new ProcessInboundConversationMessage($messageChannelB))->handle(app(InboundMessageRouter::class));
+});

@@ -31,6 +31,12 @@ use Illuminate\Support\Facades\Cache;
  * marcador de Cache::add() sí persiste durante los $dedupHours completos,
  * independientemente de cuánto tardó el procesamiento original.
  *
+ * La clave incluye phoneNumberId (no solo messageId): no se asume que el
+ * identificador de mensaje sea único de forma global entre proveedores —
+ * es una garantía real para Meta (WAMID), pero un futuro proveedor
+ * (Telegram, por ejemplo) tiene message_id único solo dentro de un chat,
+ * no global. Mismo criterio que la clave del mutex de arriba.
+ *
  * Esto vive en Redis — no sobrevive un reinicio de infraestructura ni cubre
  * reintentos más allá de la ventana configurada; si eso llega a ser un
  * problema real, la evolución identificada es persistir mensajes procesados
@@ -56,7 +62,7 @@ class ProcessInboundConversationMessage implements ShouldQueue
 
     public function handle(InboundMessageRouter $router): void
     {
-        $dedupKey = "whatsapp_message_processed:{$this->message->messageId}";
+        $dedupKey = "inbound_message_processed:{$this->message->phoneNumberId}:{$this->message->messageId}";
         $dedupHours = $this->dedupHours ?? config('conversations.message_dedup_hours');
 
         if (! Cache::add($dedupKey, true, now()->addHours($dedupHours))) {
