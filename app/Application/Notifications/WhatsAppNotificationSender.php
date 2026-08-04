@@ -7,12 +7,14 @@ use App\Application\Exceptions\NotificationDeliveryException;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
-use Illuminate\Support\Facades\Http;
 
 /**
  * Implementación real para el MVP — resuelve el Channel de WhatsApp de la
- * organización (Parte XVI) y llama directo a la Graph API de Meta. Nunca
- * usa el `Store`/`WhatsAppPlatformSetting` del bot de turismo — esa
+ * organización (Parte XVI) y valida que esté en condiciones de recibir un
+ * envío. La comunicación con Meta en sí está encapsulada en
+ * MetaWhatsAppClient — esta clase no arma payloads ni conoce la Graph API.
+ *
+ * Nunca usa el `Store`/`WhatsAppPlatformSetting` del bot de turismo — esa
  * dependencia habría acoplado el dominio nuevo al viejo justo donde más
  * cuidado pusimos en desacoplarlos.
  *
@@ -22,6 +24,8 @@ use Illuminate\Support\Facades\Http;
  */
 class WhatsAppNotificationSender implements NotificationSenderInterface
 {
+    public function __construct(private readonly MetaWhatsAppClient $client) {}
+
     public function send(Organization $organization, string $toPhoneE164, string $message): void
     {
         $channel = $organization->channels()
@@ -46,20 +50,6 @@ class WhatsAppNotificationSender implements NotificationSenderInterface
             throw new NotificationDeliveryException("El canal #{$channel->id} no tiene credenciales completas.");
         }
 
-        $response = Http::withToken($accessToken)
-            ->timeout(15)
-            ->post("https://graph.facebook.com/v21.0/{$channel->phone_number_id}/messages", [
-                'messaging_product' => 'whatsapp',
-                'recipient_type' => 'individual',
-                'to' => ltrim($toPhoneE164, '+'),
-                'type' => 'text',
-                'text' => ['body' => $message],
-            ]);
-
-        if ($response->failed()) {
-            throw new NotificationDeliveryException(
-                "Meta API respondió {$response->status()} al notificar a {$toPhoneE164}: {$response->body()}"
-            );
-        }
+        $this->client->sendTextMessage($channel->phone_number_id, $accessToken, $toPhoneE164, $message);
     }
 }
