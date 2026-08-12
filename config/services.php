@@ -54,4 +54,24 @@ return [
         'key' => env('INTENT_CLASSIFIER_AI_API_KEY'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Webhook de WhatsApp (WpbotReserva, Hito 7)
+    |--------------------------------------------------------------------------
+    |
+    | Propio y separado del webhook del bot de turismo (api/whatsapp/webhook,
+    | App\Http\Controllers\WhatsAppController) — número/App de Meta distinto,
+    | verify_token propio. app_secret habilita la verificación de firma
+    | (X-Hub-Signature-256); sin configurar, InboundWhatsAppWebhookController
+    | no puede validarla — gap explícito documentado en el controller, no
+    | una omisión silenciosa (mismo estado que el webhook legado hoy, que
+    | tampoco la implementa).
+    |
+    */
+
+    'whatsapp_webhook' => [
+        'verify_token' => env('WHATSAPP_WEBHOOK_VERIFY_TOKEN'),
+        'app_secret' => env('WHATSAPP_APP_SECRET'),
+    ],
+
 ];
