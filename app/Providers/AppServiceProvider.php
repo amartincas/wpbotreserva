@@ -14,6 +14,7 @@ use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
+use App\Application\Conversations\Agents\ReservaAgent;
 use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\Classification\AiIntentClassifierStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
@@ -99,6 +100,7 @@ class AppServiceProvider extends ServiceProvider
             return new AgentSelector([
                 Intent::FueraDeAlcance->value => $this->app->make(OutOfScopeAgent::class),
                 Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
+                Intent::Reserva->value => $this->app->make(ReservaAgent::class),
             ]);
         });
     }
