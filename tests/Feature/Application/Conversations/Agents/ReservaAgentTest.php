@@ -96,7 +96,10 @@ function reservaNeverCalledAi(): AiServiceInterface
  * Registra una organización real (vía RegisterOrganizationCommand) con
  * disponibilidad los 7 días de la semana — evita que el test sea sensible
  * a en qué día de la semana corre realmente ("mañana" cualquier día tiene
- * agenda abierta).
+ * agenda abierta). weekday va de 0 (domingo) a 6 (sábado) — la convención
+ * real de resource_schedules.weekday (migración Hito 1) y la que consume
+ * AvailabilityCalculator, NO 1-7 ISO (bug real encontrado y corregido en
+ * el Hito 8: con 1-7, domingo quedaba sin ninguna fila que lo cubriera).
  */
 function reservaFixtureOrganization(string $phoneNumberId = 'wamid-reserva'): Organization
 {
@@ -119,7 +122,7 @@ function reservaFixtureOrganization(string $phoneNumberId = 'wamid-reserva'): Or
         resourceName: 'Carlos',
         weeklySchedule: array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
-            range(1, 7)
+            range(0, 6)
         ),
     ));
 
@@ -201,6 +204,26 @@ test('con disponibilidad, ofrece los horarios encontrados y queda esperando sele
     expect($sent[1]['message'])->toContain('1)');
     expect($drafts->get($session)['_awaiting_slot_selection'])->toBeTrue();
     expect($drafts->get($session)['_candidateSlots'])->not->toBeEmpty();
+});
+
+test('el domingo tiene disponibilidad (regresión Hito 8: WeeklyScheduleFieldExtractor guardaba weekday en convención ISO, distinta de la que consulta AvailabilityCalculator)', function () {
+    // Fecha explícita, no "mañana": el bug real solo se manifestaba en
+    // domingo (weekday=0) — un test basado en "el día que sea que corra
+    // esto" es precisamente cómo quedó invisible tanto tiempo.
+    $nextSunday = now()->next(CarbonImmutable::SUNDAY);
+    expect($nextSunday->dayOfWeek)->toBe(0); // confirma la convención antes de confiar en el resto del test
+
+    $organization = reservaFixtureOrganization();
+    $session = reservaFixtureSession($organization);
+    $drafts = reservaFakeDraftRepository();
+    $sent = [];
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$nextSunday->toDateString()]));
+
+    $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('el domingo'), $session, $organization);
+
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('horarios disponibles');
 });
 
 test('sin disponibilidad ese día, pide otra fecha y permite volver a intentar', function () {

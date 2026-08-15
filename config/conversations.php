@@ -15,7 +15,13 @@ return [
     |
     */
 
-    'message_dedup_hours' => env('CONVERSATION_MESSAGE_DEDUP_HOURS', 48),
+    // (int) explícito: env() siempre devuelve string cuando la variable SÍ
+    // está seteada en un .env real (solo cae al default tal cual — un int
+    // de PHP — cuando la variable no existe). Sin el cast, Carbon::addHours()
+    // revienta con TypeError en cualquier entorno con .env real (encontrado
+    // en el Hito 8, invisible en tests porque nunca se seteó esta variable
+    // en un .env de verdad hasta ese momento).
+    'message_dedup_hours' => (int) env('CONVERSATION_MESSAGE_DEDUP_HOURS', 48),
 
     /*
     |--------------------------------------------------------------------------
@@ -33,6 +39,7 @@ return [
     |
     */
 
-    'continuity_ttl_minutes' => env('CONVERSATION_CONTINUITY_TTL_MINUTES', 240),
+    // Mismo motivo del cast (int) que message_dedup_hours arriba.
+    'continuity_ttl_minutes' => (int) env('CONVERSATION_CONTINUITY_TTL_MINUTES', 240),
 
 ];

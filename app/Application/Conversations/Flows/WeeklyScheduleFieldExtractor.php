@@ -16,9 +16,17 @@ use Throwable;
  */
 class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
 {
+    // Convención 0=domingo..6=sábado — la misma que resource_schedules.weekday
+    // (documentada en su migración, Hito 1) y la que consume AvailabilityCalculator
+    // vía Carbon::dayOfWeek. Bug real encontrado en el Hito 8: esta clase
+    // originalmente le pedía a la IA 1=lunes..7=domingo (ISO) — lunes a
+    // sábado coinciden numéricamente con ambas convenciones por pura
+    // casualidad, así que quedó invisible hasta que un domingo real
+    // (weekday=7 guardado, weekday=0 consultado) devolvió disponibilidad
+    // vacía sin ningún error visible.
     private const SYSTEM_PROMPT = <<<'PROMPT'
         Extraé EXCLUSIVAMENTE el horario semanal de atención del mensaje del usuario.
-        Días de la semana: 1=Lunes, 2=Martes, 3=Miércoles, 4=Jueves, 5=Viernes, 6=Sábado, 7=Domingo.
+        Días de la semana: 0=Domingo, 1=Lunes, 2=Martes, 3=Miércoles, 4=Jueves, 5=Viernes, 6=Sábado.
         Respondé con un array JSON de objetos, uno por cada día mencionado (ej. "Lunes a Viernes" son 5 objetos), con esta forma exacta:
         [{"weekday": 1, "start_time": "09:00", "end_time": "17:00"}]
         Los horarios van en formato HH:MM de 24 horas.
