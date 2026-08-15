@@ -22,14 +22,25 @@ use Illuminate\Support\Facades\Cache;
  * Deduplicación por message_id (enmienda post-Hito 4): Meta puede reintentar
  * la entrega del webhook para el mismo mensaje — sin esto se procesaría dos
  * veces, aunque ya haya terminado de procesarse la primera vez (el mutex de
- * arriba no protege contra esto, solo contra paralelismo). Se usa
- * Cache::add() (SETNX atómico) en vez de ShouldBeUnique de Laravel a
- * propósito: ShouldBeUnique libera su lock en cuanto el job TERMINA de
- * procesarse, no durante toda la ventana configurada — un reenvío de Meta
- * que llegue después de que el primer job ya completó (el caso más común,
- * dado que procesar un mensaje toma segundos) no quedaría cubierto. El
- * marcador de Cache::add() sí persiste durante los $dedupHours completos,
+ * arriba no protege contra esto, solo contra paralelismo). El marcador de
+ * dedup persiste durante los $dedupHours completos vía Cache::put(),
  * independientemente de cuánto tardó el procesamiento original.
+ *
+ * El marcador se escribe recién DESPUÉS de que el Router termina sin
+ * excepción, y siempre dentro de la misma sección crítica que ya protege
+ * el mutex de arriba (nunca antes de intentar el trabajo real) — bug real
+ * encontrado en el Hito 8: la versión original usaba Cache::add() ANTES de
+ * ejecutar el Router para reclamar la clave, así que una falla transitoria
+ * en el primer intento (ej. un timeout de la IA) dejaba la clave reclamada
+ * para siempre sin que el trabajo real se hubiera completado — los
+ * reintentos automáticos de este mismo Job ($tries=3 abajo) chocaban con
+ * su propia clave y retornaban de inmediato como si hubieran tenido éxito,
+ * sin ejecutar el Router una segunda vez. Afectó tanto al registro de un
+ * negocio piloto real (confirmación trabada sin ningún error visible)
+ * como, más tarde, a una reserva real (un mensaje del cliente se perdió en
+ * silencio en medio del intercambio). Ya no se usa Cache::add() porque el
+ * chequeo y la escritura ahora comparten la misma sección crítica del
+ * mutex — no hace falta una operación atómica aparte.
  *
  * La clave incluye phoneNumberId (no solo messageId): no se asume que el
  * identificador de mensaje sea único de forma global entre proveedores —
@@ -64,15 +75,16 @@ class ProcessInboundConversationMessage implements ShouldQueue
     {
         $dedupKey = "inbound_message_processed:{$this->message->phoneNumberId}:{$this->message->messageId}";
         $dedupHours = $this->dedupHours ?? config('conversations.message_dedup_hours');
-
-        if (! Cache::add($dedupKey, true, now()->addHours($dedupHours))) {
-            return;
-        }
-
         $lockKey = "conversation:{$this->message->phoneNumberId}:{$this->message->fromPhone}";
 
-        Cache::lock($lockKey, $this->lockSeconds)->block($this->blockSeconds, function () use ($router) {
+        Cache::lock($lockKey, $this->lockSeconds)->block($this->blockSeconds, function () use ($router, $dedupKey, $dedupHours) {
+            if (Cache::has($dedupKey)) {
+                return;
+            }
+
             $router->handle($this->message);
+
+            Cache::put($dedupKey, true, now()->addHours($dedupHours));
         });
     }
 }

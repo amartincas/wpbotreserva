@@ -101,6 +101,36 @@ test('dos mensajes con message_id distinto se procesan ambos, sin deduplicarse e
     (new ProcessInboundConversationMessage($messageB))->handle(app(InboundMessageRouter::class));
 });
 
+/**
+ * Regresión de un bug real encontrado en el Hito 8 (primero bloqueó la
+ * confirmación de un registro de negocio, después se perdió un mensaje en
+ * medio de una reserva real): la versión original reclamaba la clave de
+ * dedup con Cache::add() ANTES de ejecutar el Router. Si el Router fallaba
+ * (ej. un timeout transitorio de la IA), la clave quedaba reclamada para
+ * siempre — el reintento automático de este mismo Job ($tries=3) chocaba
+ * con su propia clave y retornaba de inmediato sin volver a intentar el
+ * trabajo real, como si hubiera tenido éxito. Este test simula exactamente
+ * eso: el Router falla en el primer intento (el Job debe dejar que la
+ * excepción se propague, no tragársela) y el segundo intento —igual que
+ * haría Laravel al reintentar automáticamente— debe volver a invocar al
+ * Router de verdad, no hacer un no-op.
+ */
+test('si el Router falla en el primer intento, un reintento del mismo Job vuelve a invocarlo de verdad', function () {
+    $message = lockTestMessage(messageId: 'wamid.msg-retry-test-'.uniqid());
+    $router = Mockery::mock(InboundMessageRouter::class);
+    $router->shouldReceive('handle')->once()->with($message)->andThrow(new \RuntimeException('falla transitoria simulada'));
+    $router->shouldReceive('handle')->once()->with($message);
+    App::instance(InboundMessageRouter::class, $router);
+
+    $job = new ProcessInboundConversationMessage($message);
+
+    expect(fn () => $job->handle(app(InboundMessageRouter::class)))->toThrow(\RuntimeException::class);
+
+    // Segundo intento (reintento automático de Laravel tras la falla) — el
+    // Router debe ejecutarse de nuevo; Mockery hace fallar el test si no.
+    (new ProcessInboundConversationMessage($message))->handle(app(InboundMessageRouter::class));
+});
+
 test('el mismo message_id en dos Channels distintos no se deduplica entre sí — no se asume unicidad global', function () {
     $sharedMessageId = 'wamid.msg-'.uniqid();
     $messageChannelA = lockTestMessage(phoneNumberId: 'wamid-shared-id-a', messageId: $sharedMessageId);
