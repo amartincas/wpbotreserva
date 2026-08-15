@@ -1,12 +1,15 @@
 <?php
 
 use App\Application\Conversations\Flows\CacheConversationDraftRepository;
+use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Tenancy\Channel;
 use App\Enums\ChannelProvider;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Config;
 
 /**
  * El driver de cache 'array' (default de test, phpunit.xml) vive para todo
@@ -65,4 +68,43 @@ test('dos sesiones distintas nunca comparten draft', function () {
     $repo->put($sessionA, ['nombre' => 'Carlos']);
 
     expect($repo->get($sessionB))->toBe([]);
+});
+
+/**
+ * Regresión de un bug real encontrado en el Hito 8 (primer despliegue con
+ * Redis real): config('cache.serializable_classes') viene en `false` por
+ * defecto en Laravel — "por seguridad, ningún objeto PHP se deserializa
+ * desde caché" (protección contra gadget chain attacks si se filtra
+ * APP_KEY). RedisStore::unserialize() pasa ese `false` tal cual a
+ * unserialize(..., ['allowed_classes' => false]), y ese modo de PHP no
+ * lanza ninguna excepción: convierte SILENCIOSAMENTE cada objeto en
+ * __PHP_Incomplete_Class. El draft se leía sin error visible, pero
+ * RegisterOrganizationCommand fallaba después al leer ->weekday (null en
+ * el objeto incompleto) contra la restricción NOT NULL de la BD — un
+ * usuario real quedó con su registro de negocio trabado en el paso de
+ * confirmación sin ningún mensaje de error.
+ *
+ * Invisible en el resto de esta suite porque phpunit.xml fuerza
+ * CACHE_STORE=array (mismo motivo documentado arriba para Cache::flush) —
+ * el driver array nunca pasa por RedisStore::unserialize(). Se fuerza
+ * Redis real acá a propósito, mismo criterio que
+ * ProcessInboundConversationMessageTest.php.
+ */
+test('un WeeklyScheduleSlot y una fecha CarbonImmutable sobreviven un round-trip real por Redis', function () {
+    Config::set('cache.default', 'redis');
+    Cache::flush();
+
+    $session = draftRepoFixtureSession('wamid-draft-repo-redis');
+    $repo = new CacheConversationDraftRepository;
+
+    $repo->put($session, [
+        'weeklySchedule' => [new WeeklyScheduleSlot(weekday: 1, startTime: '09:00', endTime: '17:00')],
+        'bookingDate' => CarbonImmutable::parse('2026-08-20'),
+    ]);
+
+    $draft = $repo->get($session);
+
+    expect($draft['weeklySchedule'][0])->toBeInstanceOf(WeeklyScheduleSlot::class);
+    expect($draft['weeklySchedule'][0]->weekday)->toBe(1);
+    expect($draft['bookingDate'])->toBeInstanceOf(CarbonImmutable::class);
 });

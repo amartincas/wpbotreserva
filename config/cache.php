@@ -123,8 +123,23 @@ return [
     | storage. By default, no PHP classes will be unserialized from your
     | cache to prevent gadget chain attacks if your APP_KEY is leaked.
     |
+    | Bug real del Hito 8: el borrador conversacional (Hito 5) sí necesita
+    | guardar objetos de dominio reales entre turnos de WhatsApp — cada
+    | turno es un Job de cola distinto que relee el draft desde Redis
+    | (RedisStore::unserialize()). Con el default `false`, PHP no lanza
+    | ninguna excepción: convierte esos objetos en __PHP_Incomplete_Class
+    | en silencio, y el fallo real recién aparecía después, al intentar
+    | guardar esos campos (ya null) en la base de datos. Invisible en
+    | tests porque phpunit.xml fuerza CACHE_STORE=array, que nunca pasa
+    | por RedisStore. Se permite explícitamente solo lo que el draft
+    | realmente guarda hoy — nunca `true` (permitir todo), para no
+    | reabrir el vector de ataque que este setting existe para cerrar.
+    |
     */
 
-    'serializable_classes' => false,
+    'serializable_classes' => [
+        \App\Application\Tenancy\WeeklyScheduleSlot::class,
+        \Carbon\CarbonImmutable::class,
+    ],
 
 ];
