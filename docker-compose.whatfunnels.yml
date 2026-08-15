@@ -1,0 +1,22 @@
+# Overlay específico del VPS compartido de whatfunnels (server1.whatfunnels.com)
+# — NO es parte del despliegue genérico documentado en docs/DEPLOYMENT.md.
+# Ese VPS ya corre Nginx Proxy Manager como único punto de entrada en los
+# puertos 80/443/81 (ver docker-compose.yml de OTROS proyectos en
+# /opt/whatfunnels/), así que el nginx de este proyecto no expone el sitio
+# directamente: se une a la red compartida whatfunnels-edge para que NPM
+# pueda alcanzarlo por nombre de contenedor (wpbotreserva-nginx-1, puerto 80
+# interno) y enrutarlo por dominio (reservas.whatfunnels.com) con su propio
+# certificado TLS — configurado ahí, no acá.
+#
+# Uso: docker compose -f docker-compose.yml -f docker-compose.whatfunnels.yml up -d --build
+
+services:
+  nginx:
+    networks:
+      - default
+      - whatfunnels-edge
+
+networks:
+  default: {}
+  whatfunnels-edge:
+    external: true
