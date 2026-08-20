@@ -172,12 +172,12 @@ test('el primer mensaje del flujo pregunta la fecha, sin llamar a la IA', functi
     expect($drafts->get($session)['_started'])->toBeTrue();
 });
 
-test('si la fecha ya está respondida pero todavía no se ofrecieron horarios, los ofrece en vez de romper', function () {
+test('si la fecha y el nombre ya están respondidos pero todavía no se ofrecieron horarios, los ofrece en vez de romper', function () {
     $organization = reservaFixtureOrganization();
     $session = reservaFixtureSession($organization);
     $drafts = reservaFakeDraftRepository();
     $tomorrow = now()->addDay();
-    $drafts->put($session, ['_started' => true, 'date' => $tomorrow]);
+    $drafts->put($session, ['_started' => true, 'date' => $tomorrow, 'customerName' => 'Ana']);
     $sent = [];
     $agent = buildReservaAgent($drafts, $sent, reservaNeverCalledAi());
 
@@ -188,7 +188,7 @@ test('si la fecha ya está respondida pero todavía no se ofrecieron horarios, l
     expect($drafts->get($session)['_awaiting_slot_selection'])->toBeTrue();
 });
 
-test('con disponibilidad, ofrece los horarios encontrados y queda esperando selección', function () {
+test('después de la fecha, pregunta a nombre de quién es la reserva antes de ofrecer horarios', function () {
     $organization = reservaFixtureOrganization();
     $session = reservaFixtureSession($organization);
     $drafts = reservaFakeDraftRepository();
@@ -200,8 +200,26 @@ test('con disponibilidad, ofrece los horarios encontrados y queda esperando sele
     $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
 
     expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('horarios disponibles');
-    expect($sent[1]['message'])->toContain('1)');
+    expect($sent[1]['message'])->toContain('nombre de quién');
+    expect($drafts->get($session)['date'])->not->toBeNull();
+    expect($drafts->get($session))->not->toHaveKey('customerName');
+});
+
+test('con disponibilidad, ofrece los horarios encontrados y queda esperando selección', function () {
+    $organization = reservaFixtureOrganization();
+    $session = reservaFixtureSession($organization);
+    $drafts = reservaFakeDraftRepository();
+    $sent = [];
+    $tomorrow = now()->addDay()->toDateString();
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
+
+    $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
+
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('horarios disponibles');
+    expect($sent[2]['message'])->toContain('1)');
     expect($drafts->get($session)['_awaiting_slot_selection'])->toBeTrue();
     expect($drafts->get($session)['_candidateSlots'])->not->toBeEmpty();
 });
@@ -217,13 +235,14 @@ test('el domingo tiene disponibilidad (regresión Hito 8: WeeklyScheduleFieldExt
     $session = reservaFixtureSession($organization);
     $drafts = reservaFakeDraftRepository();
     $sent = [];
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$nextSunday->toDateString()]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$nextSunday->toDateString(), 'Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('el domingo'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
 
-    expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('horarios disponibles');
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('horarios disponibles');
 });
 
 test('sin disponibilidad ese día, pide otra fecha y permite volver a intentar', function () {
@@ -232,7 +251,7 @@ test('sin disponibilidad ese día, pide otra fecha y permite volver a intentar',
     $drafts = reservaFakeDraftRepository();
     $sent = [];
     $targetDate = now()->addDays(10)->toDateString();
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$targetDate]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$targetDate, 'Ana']));
 
     // El horario semanal de la fixture cubre los 7 días, así que "sin
     // disponibilidad" se fuerza agotando la capacidad: se reserva contra el
@@ -259,10 +278,12 @@ test('sin disponibilidad ese día, pide otra fecha y permite volver a intentar',
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('en 5 años'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
 
-    expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('No hay turnos disponibles');
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('No hay turnos disponibles');
     expect($drafts->get($session))->not->toHaveKey('date');
+    expect($drafts->get($session)['customerName'])->toBe('Ana'); // no se pierde al pedir otra fecha
 });
 
 test('una selección de horario inválida re-pregunta sin avanzar', function () {
@@ -271,14 +292,15 @@ test('una selección de horario inválida re-pregunta sin avanzar', function () 
     $drafts = reservaFakeDraftRepository();
     $sent = [];
     $tomorrow = now()->addDay()->toDateString();
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
     $agent->handle(reservaFixtureMessage('la opción que sea'), $session, $organization);
 
-    expect($sent)->toHaveCount(3);
-    expect($sent[2]['message'])->toContain('No entendí la opción');
+    expect($sent)->toHaveCount(4);
+    expect($sent[3]['message'])->toContain('No entendí la opción');
     expect($drafts->get($session)['_awaiting_slot_selection'])->toBeTrue();
 });
 
@@ -288,19 +310,20 @@ test('una selección válida pide confirmación', function () {
     $drafts = reservaFakeDraftRepository();
     $sent = [];
     $tomorrow = now()->addDay()->toDateString();
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
     $agent->handle(reservaFixtureMessage('1'), $session, $organization);
 
-    expect($sent)->toHaveCount(3);
-    expect($sent[2]['message'])->toContain('Confirmás el turno');
+    expect($sent)->toHaveCount(4);
+    expect($sent[3]['message'])->toContain('Confirmás el turno');
     expect($drafts->get($session)['_awaiting_confirmation'])->toBeTrue();
     expect(Booking::count())->toBe(0);
 });
 
-test('al confirmar con sí, crea la reserva, limpia el draft y el Intent, y confirma al cliente', function () {
+test('al confirmar con sí, crea la reserva con el nombre del cliente, limpia el draft y el Intent, y confirma al cliente', function () {
     $organization = reservaFixtureOrganization();
     $session = reservaFixtureSession($organization);
     $sessions = new EloquentConversationSessionRepository;
@@ -308,18 +331,20 @@ test('al confirmar con sí, crea la reserva, limpia el draft y el Intent, y conf
     $drafts = reservaFakeDraftRepository();
     $sent = [];
     $tomorrow = now()->addDay()->toDateString();
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
     $agent->handle(reservaFixtureMessage('1'), $session, $organization);
     $agent->handle(reservaFixtureMessage('sí'), $session, $organization);
 
     expect(Booking::count())->toBe(1);
+    expect(Booking::first()->customer->name)->toBe('Ana');
     expect($drafts->get($session))->toBe([]);
     expect($session->fresh()->current_intent)->toBeNull();
-    expect($sent)->toHaveCount(4);
-    expect($sent[3]['message'])->toContain('quedó confirmado');
+    expect($sent)->toHaveCount(5);
+    expect($sent[4]['message'])->toContain('quedó confirmado');
 });
 
 test('si la confirmación no es un sí, vuelve a pedir confirmación sin crear la reserva', function () {
@@ -328,10 +353,11 @@ test('si la confirmación no es un sí, vuelve a pedir confirmación sin crear l
     $drafts = reservaFakeDraftRepository();
     $sent = [];
     $tomorrow = now()->addDay()->toDateString();
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
     $agent->handle(reservaFixtureMessage('1'), $session, $organization);
     $agent->handle(reservaFixtureMessage('tal vez'), $session, $organization);
 
@@ -345,10 +371,11 @@ test('si el horario se ocupa justo antes de confirmar, avisa y reinicia el draft
     $drafts = reservaFakeDraftRepository();
     $sent = [];
     $tomorrow = now()->addDay()->toDateString();
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow]));
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
     $agent->handle(reservaFixtureMessage('1'), $session, $organization);
 
     // Alguien más ocupa exactamente ese horario antes de que el cliente confirme.
@@ -366,6 +393,6 @@ test('si el horario se ocupa justo antes de confirmar, avisa y reinicia el draft
     $agent->handle(reservaFixtureMessage('sí'), $session, $organization);
 
     expect(Booking::count())->toBe(1); // solo la del otro cliente
-    expect($sent[3]['message'])->toContain('se ocupó');
+    expect($sent[4]['message'])->toContain('se ocupó');
     expect($drafts->get($session))->toBe([]);
 });

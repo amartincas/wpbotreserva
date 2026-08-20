@@ -8,6 +8,7 @@ use App\Application\Contracts\AgentInterface;
 use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\NotificationSenderInterface;
+use App\Application\Conversations\Flows\AiFieldExtractor;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Conversations\Flows\DateFieldExtractor;
 use App\Application\Conversations\Flows\FlowProgress;
@@ -31,11 +32,11 @@ use Illuminate\Support\Collection;
  *
  * Alcance MVP (Parte XII): cada Organization tiene exactamente un Location,
  * un Service y un Resource (creados así por RegisterOrganizationCommand) —
- * no hace falta preguntar cuál, solo cuándo. Por eso el FlowStep[] tiene un
- * único paso (fecha); ofrecer horarios y confirmar son fases propias del
- * Agent, no del Runner — presentar una lista dinámica de opciones no es lo
- * mismo que pedir un campo declarativo, y forzarlo dentro de FlowStep
- * habría sido la abstracción prematura que veníamos evitando.
+ * no hace falta preguntar cuál, solo cuándo y a nombre de quién. Ofrecer
+ * horarios y confirmar son fases propias del Agent, no del Runner —
+ * presentar una lista dinámica de opciones no es lo mismo que pedir un
+ * campo declarativo, y forzarlo dentro de FlowStep habría sido la
+ * abstracción prematura que veníamos evitando.
  */
 class ReservaAgent implements AgentInterface
 {
@@ -58,6 +59,11 @@ class ReservaAgent implements AgentInterface
                 'date',
                 fn () => '¿Para qué día querés el turno?',
                 new DateFieldExtractor($ai),
+            ),
+            new FlowStep(
+                'customerName',
+                fn () => '¿A nombre de quién hago la reserva?',
+                new AiFieldExtractor($ai, 'nombre del cliente', 'El nombre de la persona que va a usar el turno.'),
             ),
         ];
     }
@@ -103,20 +109,19 @@ class ReservaAgent implements AgentInterface
 
         match ($progress->status) {
             FlowProgressStatus::Invalid => $this->reply($organization, $message->fromPhone, $progress->reason),
-            FlowProgressStatus::NextStep => $this->askNextStep($organization, $message->fromPhone, $progress),
+            FlowProgressStatus::NextStep => $this->askNextStep($session, $organization, $message->fromPhone, $progress),
             FlowProgressStatus::Completed => $this->offerSlots($session, $organization, $progress->draft),
         };
     }
 
-    /**
-     * No cubierto por test: con un único FlowStep ('date'), advance() nunca
-     * devuelve NextStep — completar el único paso siempre resulta en
-     * Completed. Se mantiene el branch por completitud/consistencia con
-     * RegistroNegocioAgent y para no romper si algún día se agrega un
-     * segundo step (ej. cantidad de personas).
-     */
-    private function askNextStep(Organization $organization, string $toPhone, FlowProgress $progress): void
+    private function askNextStep(ConversationSession $session, Organization $organization, string $toPhone, FlowProgress $progress): void
     {
+        // Bug real encontrado al agregar el segundo FlowStep (nombre del
+        // cliente): con un único paso, esta rama nunca se ejecutaba (advance()
+        // siempre devolvía Completed), así que faltaba persistir el draft acá
+        // — invisible hasta que hubo un paso intermedio de verdad que
+        // atravesarla. Mismo patrón que RegistroNegocioAgent::askNextStep().
+        $this->drafts->put($session, $progress->draft);
         $this->reply($organization, $toPhone, ($progress->step->prompt)($progress->draft));
     }
 
@@ -188,7 +193,7 @@ class ReservaAgent implements AgentInterface
                 location: $organization->locations()->first(),
                 service: $organization->services()->first(),
                 customerPhone: $message->fromPhone,
-                customerName: null,
+                customerName: $draft['customerName'] ?? null,
                 startsAt: CarbonImmutable::parse($draft['chosenSlot']),
                 resource: $organization->resources()->first(),
             ));

@@ -23,6 +23,7 @@ class DateFieldExtractor implements FieldExtractorInterface
 
         $systemPrompt = <<<PROMPT
             Hoy es {$today}. Extraé EXCLUSIVAMENTE la fecha a la que se refiere el mensaje del usuario (el día que quiere el turno).
+            Si el mensaje es solo un número de 1 a 31 (por ejemplo "24" o "el 24"), interpretalo como ese día del mes actual — o del próximo mes si ese día ya pasó este mes.
             Respondé con la fecha en formato YYYY-MM-DD, sin texto adicional.
             Si el mensaje no contiene una referencia de fecha clara, respondé exactamente: NO_ENCONTRADO
             PROMPT;
