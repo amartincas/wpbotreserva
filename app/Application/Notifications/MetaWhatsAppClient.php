@@ -19,6 +19,38 @@ class MetaWhatsAppClient implements ChannelClientInterface
 
     public function sendTextMessage(Channel $channel, string $to, string $message): void
     {
+        $accessToken = $this->accessTokenFor($channel);
+
+        $this->post($channel, $accessToken, $to, [
+            'type' => 'text',
+            'text' => ['body' => $message],
+        ]);
+    }
+
+    public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void
+    {
+        $accessToken = $this->accessTokenFor($channel);
+
+        $this->post($channel, $accessToken, $to, [
+            'type' => 'template',
+            'template' => [
+                'name' => $templateName,
+                'language' => ['code' => $language],
+                'components' => [
+                    [
+                        'type' => 'body',
+                        'parameters' => array_map(
+                            fn (string $value) => ['type' => 'text', 'text' => $value],
+                            $bodyParameters
+                        ),
+                    ],
+                ],
+            ],
+        ]);
+    }
+
+    private function accessTokenFor(Channel $channel): string
+    {
         $accessToken = $channel->credentials['access_token'] ?? null;
 
         if (! $accessToken || ! $channel->phone_number_id) {
@@ -27,15 +59,18 @@ class MetaWhatsAppClient implements ChannelClientInterface
             );
         }
 
+        return $accessToken;
+    }
+
+    private function post(Channel $channel, string $accessToken, string $to, array $payload): void
+    {
         $response = Http::withToken($accessToken)
             ->timeout(15)
-            ->post(sprintf('https://graph.facebook.com/%s/%s/messages', self::API_VERSION, $channel->phone_number_id), [
+            ->post(sprintf('https://graph.facebook.com/%s/%s/messages', self::API_VERSION, $channel->phone_number_id), array_merge([
                 'messaging_product' => 'whatsapp',
                 'recipient_type' => 'individual',
                 'to' => ltrim($to, '+'),
-                'type' => 'text',
-                'text' => ['body' => $message],
-            ]);
+            ], $payload));
 
         if ($response->failed()) {
             throw new NotificationDeliveryException(

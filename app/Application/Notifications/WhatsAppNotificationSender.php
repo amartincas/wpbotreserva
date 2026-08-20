@@ -5,6 +5,7 @@ namespace App\Application\Notifications;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Exceptions\NotificationDeliveryException;
+use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
@@ -31,6 +32,20 @@ class WhatsAppNotificationSender implements NotificationSenderInterface
 
     public function send(Organization $organization, string $toPhoneE164, string $message): void
     {
+        $channel = $this->activeWhatsAppChannelFor($organization);
+
+        $this->client->sendTextMessage($channel, $toPhoneE164, $message);
+    }
+
+    public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void
+    {
+        $channel = $this->activeWhatsAppChannelFor($organization);
+
+        $this->client->sendTemplateMessage($channel, $toPhoneE164, $templateName, $language, $bodyParameters);
+    }
+
+    private function activeWhatsAppChannelFor(Organization $organization): Channel
+    {
         $channel = $organization->channels()
             ->where('channel_type', ChannelType::WHATSAPP->value)
             ->first();
@@ -47,6 +62,6 @@ class WhatsAppNotificationSender implements NotificationSenderInterface
             );
         }
 
-        $this->client->sendTextMessage($channel, $toPhoneE164, $message);
+        return $channel;
     }
 }

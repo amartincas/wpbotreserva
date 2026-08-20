@@ -39,6 +39,8 @@ test('handle() manda la notificación con el teléfono y el mensaje correctos', 
         {
             $this->sharedRef[] = compact('organization', 'toPhoneE164', 'message');
         }
+
+        public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
     };
 
     (new SendBookingConfirmationNotification($fakeSender))->handle(new BookingConfirmed($booking));

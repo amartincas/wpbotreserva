@@ -32,6 +32,8 @@ test('handle() manda la notificación de reprogramación con la fecha anterior y
         {
             $this->sharedRef[] = compact('organization', 'toPhoneE164', 'message');
         }
+
+        public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
     };
 
     (new SendBookingRescheduleNotification($fakeSender))->handle(new BookingRescheduled($booking, $previousStartsAt));

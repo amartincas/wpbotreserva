@@ -41,6 +41,11 @@ function fakeChannelClient(array &$calls): ChannelClientInterface
         {
             $this->sharedRef[] = compact('channel', 'to', 'message');
         }
+
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void
+        {
+            $this->sharedRef[] = compact('channel', 'to', 'templateName', 'language', 'bodyParameters');
+        }
     };
 }
 
@@ -65,6 +70,31 @@ test('con la implementación real (MetaWhatsAppClient), efectivamente llega a la
         ->send($org, '+573001234567', 'Hola, tu reserva está confirmada.');
 
     Http::assertSent(fn ($request) => $request->url() === 'https://graph.facebook.com/v21.0/wamid-123/messages');
+});
+
+test('sendTemplate depende de ChannelClientInterface: un cliente falso recibe el channel resuelto y los parámetros posicionales', function () {
+    $calls = [];
+    [$org, $channel] = organizationWithChannel();
+
+    (new WhatsAppNotificationSender(fakeChannelClient($calls)))
+        ->sendTemplate($org, '+573001234567', 'recordatorio_reserva', 'es', ['Ana', 'Corte', 'AMC Studios', '24/08/2026', '15:00']);
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['channel']->is($channel))->toBeTrue();
+    expect($calls[0]['templateName'])->toBe('recordatorio_reserva');
+    expect($calls[0]['language'])->toBe('es');
+    expect($calls[0]['bodyParameters'])->toBe(['Ana', 'Corte', 'AMC Studios', '24/08/2026', '15:00']);
+});
+
+test('sendTemplate con la implementación real llega a la Graph API de Meta', function () {
+    Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.abc']]], 200)]);
+    [$org] = organizationWithChannel();
+
+    (new WhatsAppNotificationSender(new MetaWhatsAppClient))
+        ->sendTemplate($org, '+573001234567', 'recordatorio_reserva', 'es', ['Ana']);
+
+    Http::assertSent(fn ($request) => $request->url() === 'https://graph.facebook.com/v21.0/wamid-123/messages'
+        && $request['type'] === 'template');
 });
 
 test('lanza NotificationDeliveryException si la organización no tiene channel de WhatsApp', function () {

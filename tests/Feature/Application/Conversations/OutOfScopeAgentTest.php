@@ -20,6 +20,8 @@ function outOfScopeFakeSender(array &$calls): NotificationSenderInterface
         {
             $this->calls[] = compact('organization', 'toPhoneE164', 'message');
         }
+
+        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
     };
 }
 

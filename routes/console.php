@@ -18,3 +18,8 @@ Schedule::command('backup:database')->dailyAt('03:00')->withoutOverlapping();
 // como si siguieran activos. Diaria a las 9am: hora hábil, para que el
 // dueño vea el recordatorio de WhatsApp en un horario razonable.
 Schedule::command('bookings:review-past')->dailyAt('09:00')->withoutOverlapping();
+
+// Recordatorio al cliente ~24h antes de su turno (Incremento 3), por
+// plantilla de Meta — cada hora, para que la ventana de 23-24h no se salte
+// ninguna reserva entre corridas.
+Schedule::command('bookings:send-upcoming-reminders')->hourly()->withoutOverlapping();

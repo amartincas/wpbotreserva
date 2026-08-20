@@ -30,6 +30,8 @@ test('handle() manda la notificación de cancelación con el teléfono y el mens
         {
             $this->sharedRef[] = compact('organization', 'toPhoneE164', 'message');
         }
+
+        public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
     };
 
     (new SendBookingCancellationNotification($fakeSender))->handle(new BookingCancelled($booking));

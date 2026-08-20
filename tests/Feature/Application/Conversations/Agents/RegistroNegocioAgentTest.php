@@ -51,6 +51,8 @@ function registroFakeChannelClient(array &$sent): ChannelClientInterface
         {
             $this->sent[] = compact('channel', 'to', 'message');
         }
+
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void {}
     };
 }
 

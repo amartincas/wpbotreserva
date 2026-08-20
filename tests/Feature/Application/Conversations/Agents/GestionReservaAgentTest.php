@@ -59,6 +59,8 @@ function gestionFakeNotificationSender(array &$sent): NotificationSenderInterfac
         {
             $this->sent[] = compact('organization', 'toPhoneE164', 'message');
         }
+
+        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
     };
 }
 

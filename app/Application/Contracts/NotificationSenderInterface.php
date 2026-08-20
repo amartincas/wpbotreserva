@@ -17,4 +17,11 @@ interface NotificationSenderInterface
      * @throws NotificationDeliveryException si el envío falla
      */
     public function send(Organization $organization, string $toPhoneE164, string $message): void;
+
+    /**
+     * @param  string[]  $bodyParameters  posicional, mismo orden que las variables {{1}}, {{2}}... de la plantilla
+     *
+     * @throws NotificationDeliveryException si el envío falla
+     */
+    public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void;
 }

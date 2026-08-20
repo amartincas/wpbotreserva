@@ -57,3 +57,42 @@ test('no lanza excepción cuando Meta responde exitosamente', function () {
 
     (new MetaWhatsAppClient)->sendTextMessage(metaChannel(), '+573001234567', 'Hola');
 })->throwsNoExceptions();
+
+test('sendTemplateMessage arma el payload de plantilla con los parámetros posicionales en orden', function () {
+    Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.abc']]], 200)]);
+
+    (new MetaWhatsAppClient)->sendTemplateMessage(
+        metaChannel(phoneNumberId: 'wamid-456'),
+        '+573001234567',
+        'recordatorio_reserva',
+        'es',
+        ['Ana', 'Corte de cabello', 'AMC Studios', '24/08/2026', '15:00'],
+    );
+
+    Http::assertSent(function ($request) {
+        return $request->url() === 'https://graph.facebook.com/v21.0/wamid-456/messages'
+            && $request['type'] === 'template'
+            && $request['template']['name'] === 'recordatorio_reserva'
+            && $request['template']['language']['code'] === 'es'
+            && $request['template']['components'][0]['type'] === 'body'
+            && $request['template']['components'][0]['parameters'] === [
+                ['type' => 'text', 'text' => 'Ana'],
+                ['type' => 'text', 'text' => 'Corte de cabello'],
+                ['type' => 'text', 'text' => 'AMC Studios'],
+                ['type' => 'text', 'text' => '24/08/2026'],
+                ['type' => 'text', 'text' => '15:00'],
+            ];
+    });
+});
+
+test('sendTemplateMessage lanza NotificationDeliveryException si faltan credenciales, igual que sendTextMessage', function () {
+    expect(fn () => (new MetaWhatsAppClient)->sendTemplateMessage(metaChannel(credentials: null), '+573001234567', 'recordatorio_reserva', 'es', ['Ana']))
+        ->toThrow(NotificationDeliveryException::class);
+});
+
+test('sendTemplateMessage lanza NotificationDeliveryException cuando Meta responde con error (ej. plantilla no aprobada)', function () {
+    Http::fake(['graph.facebook.com/*' => Http::response(['error' => ['message' => 'Template not approved']], 400)]);
+
+    expect(fn () => (new MetaWhatsAppClient)->sendTemplateMessage(metaChannel(), '+573001234567', 'recordatorio_reserva', 'es', ['Ana']))
+        ->toThrow(NotificationDeliveryException::class, 'Meta API respondió 400');
+});

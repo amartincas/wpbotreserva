@@ -23,4 +23,17 @@ interface ChannelClientInterface
      * @throws NotificationDeliveryException si el envío falla o el canal no tiene credenciales válidas para este proveedor
      */
     public function sendTextMessage(Channel $channel, string $to, string $message): void;
+
+    /**
+     * Mensaje de plantilla (HSM) — único tipo de envío permitido fuera de la
+     * ventana de 24h de conversación gratuita de WhatsApp (Incremento 3:
+     * recordatorio de turno, que por diseño casi siempre se manda fuera de
+     * esa ventana). $bodyParameters va posicional, en el mismo orden que
+     * las variables {{1}}, {{2}}... de la plantilla ya aprobada por Meta.
+     *
+     * @param  string[]  $bodyParameters
+     *
+     * @throws NotificationDeliveryException si el envío falla, el canal no tiene credenciales válidas, o la plantilla no está aprobada
+     */
+    public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void;
 }
