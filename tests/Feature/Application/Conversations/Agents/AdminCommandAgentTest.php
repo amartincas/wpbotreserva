@@ -143,6 +143,21 @@ test('"reservas dd/mm/aaaa" lista las reservas de esa fecha específica, no las 
     expect($sent[0]['message'])->not->toContain('10:00');
 });
 
+test('"reservas hoy"/"reservas dd/mm/aaaa" nunca listan una reserva cancelada', function () {
+    $organization = adminAgentFixtureOrganization();
+    $cancelled = adminAgentFixtureBooking($organization, now()->setTime(10, 0));
+    (new CancelBookingCommand(app(BookingSchedulerInterface::class)))->handle($cancelled);
+    $stillActive = adminAgentFixtureBooking($organization, now()->setTime(11, 0));
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage('reservas hoy'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('11:00');
+    expect($sent[0]['message'])->not->toContain('10:00');
+});
+
 test('"reservas dd/mm/aaaa" sin reservas ese día avisa con la fecha pedida', function () {
     $organization = adminAgentFixtureOrganization();
     $session = adminAgentFixtureSession($organization);

@@ -12,6 +12,7 @@ use App\Domain\Booking\Exceptions\BookingAlreadyTerminalException;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Tenancy\Organization;
+use App\Enums\BookingStatus;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 
@@ -97,8 +98,12 @@ class AdminCommandAgent implements AgentInterface
 
     private function listForDate(Organization $organization, string $toPhone, CarbonImmutable $date, string $label): void
     {
+        // Excluye canceladas a propósito: caso real, el dueño vio una
+        // reserva que el cliente ya había cancelado listada igual que las
+        // vigentes, sin ninguna forma de distinguirla.
         $bookings = $organization->bookings()
             ->whereDate('starts_at', $date->toDateString())
+            ->where('status', '!=', BookingStatus::CANCELLED)
             ->orderBy('starts_at')
             ->get();
 
