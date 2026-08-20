@@ -15,6 +15,7 @@ use App\Application\Contracts\IntentClassifierInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
+use App\Application\Conversations\Agents\BookingChoiceAgent;
 use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
@@ -31,8 +32,10 @@ use App\Application\Notifications\MetaWhatsAppClient;
 use App\Application\Notifications\WhatsAppNotificationSender;
 use App\Application\Organizations\SingleOrganizationResolver;
 use App\Contracts\AiServiceInterface;
+use App\Domain\Booking\ActiveBookingsFinder;
 use App\Domain\Booking\AvailabilityCalculator;
 use App\Domain\Booking\BookingScheduler;
+use App\Domain\Booking\Contracts\ActiveBookingsFinderInterface;
 use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
 use App\Domain\Booking\Events\BookingCancelled;
@@ -62,6 +65,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(AvailabilityCalculatorInterface::class, AvailabilityCalculator::class);
         $this->app->bind(BookingSchedulerInterface::class, BookingScheduler::class);
+        $this->app->bind(ActiveBookingsFinderInterface::class, ActiveBookingsFinder::class);
         $this->app->bind(NotificationSenderInterface::class, WhatsAppNotificationSender::class);
         $this->app->bind(ChannelClientInterface::class, MetaWhatsAppClient::class);
         $this->app->bind(EntitlementCheckerInterface::class, UnlimitedEntitlementChecker::class);
@@ -110,6 +114,7 @@ class AppServiceProvider extends ServiceProvider
                 Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
                 Intent::Reserva->value => $this->app->make(ReservaAgent::class),
                 Intent::GestionReserva->value => $this->app->make(GestionReservaAgent::class),
+                Intent::ReservaOGestion->value => $this->app->make(BookingChoiceAgent::class),
                 Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
             ]);
         });

@@ -13,12 +13,12 @@ use App\Application\Conversations\Flows\FlowProgressStatus;
 use App\Application\Conversations\Flows\FlowStep;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Booking\Booking;
+use App\Domain\Booking\Contracts\ActiveBookingsFinderInterface;
 use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
 use App\Domain\Booking\Exceptions\SlotNoLongerAvailableException;
 use App\Domain\Booking\ValueObjects\AvailableSlot;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
-use App\Domain\CRM\Customer;
 use App\Domain\Tenancy\Organization;
 use App\Enums\BookingStatus;
 use Carbon\CarbonImmutable;
@@ -55,6 +55,7 @@ class GestionReservaAgent implements AgentInterface
         private readonly ConversationDraftRepositoryInterface $drafts,
         private readonly NotificationSenderInterface $notifications,
         private readonly AvailabilityCalculatorInterface $availability,
+        private readonly ActiveBookingsFinderInterface $activeBookings,
         private readonly CancelBookingCommand $cancelBooking,
         private readonly RescheduleBookingCommand $rescheduleBooking,
         AiServiceInterface $ai,
@@ -119,7 +120,7 @@ class GestionReservaAgent implements AgentInterface
 
     private function startFlow(InboundMessage $message, ConversationSession $session, Organization $organization): void
     {
-        $activeBookings = $this->activeBookingsFor($organization, $message->fromPhone);
+        $activeBookings = $this->activeBookings->forCustomer($organization, $message->fromPhone);
 
         if ($activeBookings->isEmpty()) {
             $this->reply($organization, $message->fromPhone, 'No tenés ninguna reserva activa en este momento.');
@@ -341,20 +342,6 @@ class GestionReservaAgent implements AgentInterface
         $this->reply($organization, $message->fromPhone, 'Listo, tu turno quedó reprogramado.');
     }
 
-    private function activeBookingsFor(Organization $organization, string $phone): Collection
-    {
-        $customer = Customer::where('organization_id', $organization->id)->where('phone', $phone)->first();
-
-        if ($customer === null) {
-            return collect();
-        }
-
-        return $customer->bookings()
-            ->get()
-            ->reject(fn (Booking $booking) => $booking->isTerminal())
-            ->sortBy('starts_at')
-            ->values();
-    }
 
     /**
      * @param  Collection<int, Booking>  $bookings

@@ -8,6 +8,8 @@ use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\InboundMessageRouter;
 use App\Application\Organizations\SingleOrganizationResolver;
+use App\Domain\Booking\Booking;
+use App\Domain\Booking\Contracts\ActiveBookingsFinderInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\Events\InboundMessageRejected;
 use App\Domain\Conversational\InboundMessage;
@@ -17,6 +19,7 @@ use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
 
 function routerFixtureMessage(string $phoneNumberId, string $text = 'hola'): InboundMessage
@@ -68,7 +71,25 @@ function routerFixtureOrganizationlessAgent(array &$calls): OrganizationlessAgen
     };
 }
 
-function buildRouter(Intent $intent, array &$agentCalls, ?array $agentsByIntent = null): InboundMessageRouter
+/**
+ * Fake configurable: por defecto nunca encuentra reservas activas (para no
+ * afectar los tests de orquestación que no tienen nada que ver con
+ * desambiguación) — los tests de ReservaOGestion lo cargan con bookings.
+ */
+function routerFixtureActiveBookingsFinder(Collection $bookings = new Collection): ActiveBookingsFinderInterface
+{
+    return new class($bookings) implements ActiveBookingsFinderInterface
+    {
+        public function __construct(private readonly Collection $bookings) {}
+
+        public function forCustomer(Organization $organization, string $phone): Collection
+        {
+            return $this->bookings;
+        }
+    };
+}
+
+function buildRouter(Intent $intent, array &$agentCalls, ?array $agentsByIntent = null, ?ActiveBookingsFinderInterface $activeBookings = null): InboundMessageRouter
 {
     $agentsByIntent ??= [$intent->value => routerFixtureAgent($agentCalls)];
 
@@ -78,6 +99,7 @@ function buildRouter(Intent $intent, array &$agentCalls, ?array $agentsByIntent 
         new SingleOrganizationResolver,
         routerFixtureClassifier($intent),
         new AgentSelector($agentsByIntent),
+        $activeBookings ?? routerFixtureActiveBookingsFinder(),
     );
 }
 
@@ -243,4 +265,129 @@ test('en el segundo mensaje de la misma conversación, reutiliza la organizació
 
     expect($calls)->toHaveCount(2);
     expect($calls[1]['organization']->is($org))->toBeTrue();
+});
+
+test('con reservas activas, un mensaje nuevo clasificado como Reserva se desvía a ReservaOGestion en vez de ir directo al Agent', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-router-choice-reserva',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    $calls = [];
+    $choiceCalls = [];
+    $router = buildRouter(
+        Intent::Reserva,
+        $calls,
+        agentsByIntent: [
+            Intent::Reserva->value => routerFixtureAgent($calls),
+            Intent::ReservaOGestion->value => routerFixtureAgent($choiceCalls),
+        ],
+        activeBookings: routerFixtureActiveBookingsFinder(collect([new Booking])),
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-choice-reserva', 'quiero un turno'));
+
+    expect($calls)->toBeEmpty(); // ReservaAgent nunca se invoca directo
+    expect($choiceCalls)->toHaveCount(1);
+
+    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
+    expect($session->current_intent)->toBe(Intent::ReservaOGestion->value);
+});
+
+test('con reservas activas, un mensaje nuevo clasificado como GestionReserva también se desvía a ReservaOGestion', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-router-choice-gestion',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    $calls = [];
+    $choiceCalls = [];
+    $router = buildRouter(
+        Intent::GestionReserva,
+        $calls,
+        agentsByIntent: [
+            Intent::GestionReserva->value => routerFixtureAgent($calls),
+            Intent::ReservaOGestion->value => routerFixtureAgent($choiceCalls),
+        ],
+        activeBookings: routerFixtureActiveBookingsFinder(collect([new Booking])),
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-choice-gestion', 'quiero cancelar mi turno'));
+
+    expect($calls)->toBeEmpty();
+    expect($choiceCalls)->toHaveCount(1);
+});
+
+test('sin reservas activas, Reserva va directo al Agent sin pasar por la desambiguación', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-router-nochoice',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    $calls = [];
+    $router = buildRouter(Intent::Reserva, $calls); // activeBookings default: vacío
+
+    $router->handle(routerFixtureMessage('wamid-router-nochoice', 'quiero un turno'));
+
+    expect($calls)->toHaveCount(1);
+});
+
+test('mid-flujo (current_intent ya activo), nunca se re-evalúa la desambiguación aunque haya reservas activas', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-router-midflow',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    $calls = [];
+    $choiceCalls = [];
+
+    // A diferencia de routerFixtureClassifier (siempre devuelve lo mismo),
+    // este fake imita el comportamiento real de ConversationContinuityStrategy:
+    // si la sesión ya tiene un Intent activo, lo repite — es justamente esa
+    // repetición la que hace que $isFreshFlow sea false en el segundo
+    // mensaje y la desambiguación nunca se vuelva a evaluar.
+    $continuityLikeClassifier = new class implements IntentClassifierInterface
+    {
+        public function classify(InboundMessage $message, ConversationSession $session): Intent
+        {
+            return $session->current_intent !== null
+                ? Intent::from($session->current_intent)
+                : Intent::Reserva;
+        }
+    };
+
+    $router = new InboundMessageRouter(
+        new PhoneNumberIdChannelResolver,
+        new EloquentConversationSessionRepository,
+        new SingleOrganizationResolver,
+        $continuityLikeClassifier,
+        new AgentSelector([
+            Intent::Reserva->value => routerFixtureAgent($calls),
+            Intent::ReservaOGestion->value => routerFixtureAgent($choiceCalls),
+        ]),
+        routerFixtureActiveBookingsFinder(collect([new Booking])),
+    );
+
+    // Primer mensaje: ya arranca con reservas activas — se desvía a choice.
+    $router->handle(routerFixtureMessage('wamid-router-midflow', 'primer mensaje'));
+    expect($choiceCalls)->toHaveCount(1);
+
+    // Segundo mensaje: current_intent ya quedó en ReservaOGestion, así que
+    // $isFreshFlow es false — sigue yendo a choice, nunca se vuelve a
+    // evaluar la condición de reservas activas.
+    $router->handle(routerFixtureMessage('wamid-router-midflow', 'segundo mensaje'));
+    expect($choiceCalls)->toHaveCount(2);
+    expect($calls)->toBeEmpty();
 });
