@@ -36,10 +36,13 @@ function reviewPastFakeNotificationSender(array &$sent): NotificationSenderInter
 
         public function send(Organization $organization, string $toPhoneE164, string $message): void
         {
-            $this->sent[] = compact('organization', 'toPhoneE164', 'message');
+            throw new RuntimeException('El aviso al owner ahora es una plantilla aprobada, no texto libre.');
         }
 
-        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void
+        {
+            $this->sent[] = compact('organization', 'toPhoneE164', 'templateName', 'language', 'bodyParameters');
+        }
     };
 }
 
@@ -169,6 +172,6 @@ test('el mensaje de recordatorio y el de auto-completado se mandan al owner_phon
     foreach ($this->sent as $message) {
         expect($message['toPhoneE164'])->toBe('+573009999999');
     }
-    expect($this->sent[0]['message'])->toContain('ausente');
-    expect($this->sent[1]['message'])->toContain('completado automáticamente');
+    expect($this->sent[0]['templateName'])->toBe('aviso_turno_vencido');
+    expect($this->sent[1]['templateName'])->toBe('turno_completado_automatico');
 });

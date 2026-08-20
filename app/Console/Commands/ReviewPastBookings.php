@@ -32,6 +32,12 @@ use Illuminate\Support\Facades\Log;
  */
 class ReviewPastBookings extends Command
 {
+    private const REMINDER_TEMPLATE = 'aviso_turno_vencido';
+
+    private const AUTO_COMPLETED_TEMPLATE = 'turno_completado_automatico';
+
+    private const TEMPLATE_LANGUAGE = 'es';
+
     protected $signature = 'bookings:review-past';
 
     protected $description = 'Recuerda al dueño turnos vencidos sin resolver y completa por defecto los que llevan más de 7 días sin respuesta';
@@ -75,7 +81,13 @@ class ReviewPastBookings extends Command
             }
 
             try {
-                $notifications->send($booking->organization, $ownerPhone, $this->reminderMessage($booking));
+                $notifications->sendTemplate(
+                    $booking->organization,
+                    $ownerPhone,
+                    self::REMINDER_TEMPLATE,
+                    self::TEMPLATE_LANGUAGE,
+                    $this->bodyParameters($booking),
+                );
             } catch (NotificationDeliveryException $e) {
                 // No se marca reminder_sent_at si el envío realmente falló
                 // (mismo criterio que el Bug #3 de esta bitácora: nunca
@@ -127,7 +139,13 @@ class ReviewPastBookings extends Command
             // registra. El dueño puede ver el resultado igual con "reservas
             // dd/mm/aaaa".
             try {
-                $notifications->send($booking->organization, $ownerPhone, $this->autoCompletedMessage($booking));
+                $notifications->sendTemplate(
+                    $booking->organization,
+                    $ownerPhone,
+                    self::AUTO_COMPLETED_TEMPLATE,
+                    self::TEMPLATE_LANGUAGE,
+                    $this->bodyParameters($booking),
+                );
             } catch (NotificationDeliveryException $e) {
                 Log::warning('ReviewPastBookings: falló el aviso de auto-completado', [
                     'booking_id' => $booking->id,
@@ -139,25 +157,16 @@ class ReviewPastBookings extends Command
         return $completed;
     }
 
-    private function reminderMessage(Booking $booking): string
+    /**
+     * @return array{0: string, 1: string, 2: string, 3: string}
+     */
+    private function bodyParameters(Booking $booking): array
     {
-        return sprintf(
-            "El turno de %s (%s) el %s ya pasó.\n\nSi el cliente no se presentó, escribí \"ausente %d\". Si no hacés nada, en unos días se va a marcar como completado automáticamente.",
+        return [
             $booking->customer->name ?? $booking->customer->phone->value(),
             $booking->service->name,
             $booking->starts_at->translatedFormat('l d/m/Y H:i'),
-            $booking->id,
-        );
-    }
-
-    private function autoCompletedMessage(Booking $booking): string
-    {
-        return sprintf(
-            "El turno de %s (%s) el %s se marcó como completado automáticamente (no hubo respuesta).\n\nSi en realidad el cliente no se presentó, escribí \"ausente %d\" para corregirlo.",
-            $booking->customer->name ?? $booking->customer->phone->value(),
-            $booking->service->name,
-            $booking->starts_at->translatedFormat('l d/m/Y H:i'),
-            $booking->id,
-        );
+            (string) $booking->id,
+        ];
     }
 }
