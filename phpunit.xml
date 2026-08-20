@@ -18,26 +18,33 @@
         </include>
     </source>
     <php>
-        <env name="APP_ENV" value="testing"/>
-        <env name="APP_MAINTENANCE_DRIVER" value="file"/>
-        <env name="BCRYPT_ROUNDS" value="4"/>
-        <env name="BROADCAST_CONNECTION" value="null"/>
-        <env name="CACHE_STORE" value="array"/>
+        <!-- force="true" en TODAS estas — sin eso, un valor ya presente en
+             el entorno real (ej. .env montado como env_file en Docker) gana
+             sobre este bloque en vez de ser reemplazado por él. Así fue como
+             DB_DATABASE quedó apuntando a la base real ("wpbotreserva") en
+             vez de "wpbotreserva_test" al correr los tests dentro de un
+             contenedor con env_file: .env, y RefreshDatabase vació datos
+             reales de staging. Nunca más sin force. -->
+        <env name="APP_ENV" value="testing" force="true"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file" force="true"/>
+        <env name="BCRYPT_ROUNDS" value="4" force="true"/>
+        <env name="BROADCAST_CONNECTION" value="null" force="true"/>
+        <env name="CACHE_STORE" value="array" force="true"/>
         <!-- MariaDB real, no sqlite: los CHECK constraints del dominio (Parte
              III) no son expresables en un ALTER TABLE de sqlite, y queremos
              el mismo motor en tests que en dev/producción (Docker-first). -->
-        <env name="DB_CONNECTION" value="mariadb"/>
-        <env name="DB_HOST" value="mariadb"/>
-        <env name="DB_PORT" value="3306"/>
-        <env name="DB_DATABASE" value="wpbotreserva_test"/>
-        <env name="DB_USERNAME" value="wpbotreserva"/>
-        <env name="DB_PASSWORD" value="wpbotreserva"/>
-        <env name="DB_URL" value=""/>
-        <env name="MAIL_MAILER" value="array"/>
-        <env name="QUEUE_CONNECTION" value="sync"/>
-        <env name="SESSION_DRIVER" value="array"/>
-        <env name="PULSE_ENABLED" value="false"/>
-        <env name="TELESCOPE_ENABLED" value="false"/>
-        <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="DB_CONNECTION" value="mariadb" force="true"/>
+        <env name="DB_HOST" value="mariadb" force="true"/>
+        <env name="DB_PORT" value="3306" force="true"/>
+        <env name="DB_DATABASE" value="wpbotreserva_test" force="true"/>
+        <env name="DB_USERNAME" value="wpbotreserva" force="true"/>
+        <env name="DB_PASSWORD" value="wpbotreserva" force="true"/>
+        <env name="DB_URL" value="" force="true"/>
+        <env name="MAIL_MAILER" value="array" force="true"/>
+        <env name="QUEUE_CONNECTION" value="sync" force="true"/>
+        <env name="SESSION_DRIVER" value="array" force="true"/>
+        <env name="PULSE_ENABLED" value="false" force="true"/>
+        <env name="TELESCOPE_ENABLED" value="false" force="true"/>
+        <env name="NIGHTWATCH_ENABLED" value="false" force="true"/>
     </php>
 </phpunit>
