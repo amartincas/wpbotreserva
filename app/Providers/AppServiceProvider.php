@@ -16,6 +16,7 @@ use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
 use App\Application\Conversations\Agents\BookingChoiceAgent;
+use App\Application\Conversations\Agents\ConversationResetAgent;
 use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
@@ -25,6 +26,7 @@ use App\Application\Conversations\Classification\AiIntentClassifierStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
+use App\Application\Conversations\Classification\ResetKeywordStrategy;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\CacheConversationDraftRepository;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
@@ -95,11 +97,15 @@ class AppServiceProvider extends ServiceProvider
 
         // Orden explícito (Parte IX punto 3: clases explícitas, no un
         // registro dinámico) — comandos admin deterministas primero (cero
-        // costo de IA, coincidencia exacta), luego continuidad de
+        // costo de IA, coincidencia exacta), luego la palabra de salida
+        // (tiene que ir ANTES de continuidad: si corriera después, la
+        // continuidad ya habría repetido el Intent activo y nunca le daría
+        // la oportunidad de interrumpirlo), luego continuidad de
         // conversación, IA como último recurso.
         $this->app->bind(IntentClassifierInterface::class, function () {
             return new CompositeIntentClassifier([
                 $this->app->make(DeterministicAdminCommandStrategy::class),
+                $this->app->make(ResetKeywordStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
                 $this->app->make(AiIntentClassifierStrategy::class),
             ]);
@@ -115,6 +121,7 @@ class AppServiceProvider extends ServiceProvider
                 Intent::Reserva->value => $this->app->make(ReservaAgent::class),
                 Intent::GestionReserva->value => $this->app->make(GestionReservaAgent::class),
                 Intent::ReservaOGestion->value => $this->app->make(BookingChoiceAgent::class),
+                Intent::Reset->value => $this->app->make(ConversationResetAgent::class),
                 Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
             ]);
         });

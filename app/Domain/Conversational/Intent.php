@@ -17,6 +17,12 @@ namespace App\Domain\Conversational;
  * tiene reservas activas y arranca una conversación nueva (no continúa una
  * en curso): en vez de que la IA adivine cuál de las dos quiso decir,
  * BookingChoiceAgent se lo pregunta directo. Ver InboundMessageRouter.
+ *
+ * Reset (caso real: alguien elige mal en BookingChoiceAgent, o cambia de
+ * opinión a mitad de cualquier flujo, y queda sin forma de salir) — lo
+ * produce ResetKeywordStrategy, nunca la IA, ante una palabra exacta tipo
+ * "salir" mientras hay un Intent activo. ConversationResetAgent limpia
+ * todo y deja la próxima conversación arrancar de cero.
  */
 enum Intent: string
 {
@@ -24,6 +30,7 @@ enum Intent: string
     case Reserva = 'reserva';
     case GestionReserva = 'gestion_reserva';
     case ReservaOGestion = 'reserva_o_gestion';
+    case Reset = 'reset';
     case AdminCommand = 'admin_command';
     case FueraDeAlcance = 'fuera_de_alcance';
 }

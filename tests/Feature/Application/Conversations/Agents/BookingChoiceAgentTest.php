@@ -4,6 +4,7 @@ use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Agents\BookingChoiceAgent;
 use App\Application\Conversations\EloquentConversationSessionRepository;
+use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Conversational\Intent;
@@ -12,6 +13,37 @@ use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
+
+function bookingChoiceNeverCalledAi(): AiServiceInterface
+{
+    return new class implements AiServiceInterface
+    {
+        public function getResponse(string $userMessage, string $systemPrompt, array $history = []): string
+        {
+            throw new RuntimeException('No debería haberse llamado a la IA en este turno.');
+        }
+    };
+}
+
+/**
+ * @param  string[]  $responses
+ */
+function bookingChoiceQueuedAi(array $responses): AiServiceInterface
+{
+    return new class($responses) implements AiServiceInterface
+    {
+        public function __construct(private array $responses) {}
+
+        public function getResponse(string $userMessage, string $systemPrompt, array $history = []): string
+        {
+            if ($this->responses === []) {
+                throw new RuntimeException('Se llamó a la IA más veces de las esperadas por el test.');
+            }
+
+            return array_shift($this->responses);
+        }
+    };
+}
 
 function bookingChoiceFakeDraftRepository(): ConversationDraftRepositoryInterface
 {
@@ -77,17 +109,17 @@ function bookingChoiceFixtureMessage(string $text): InboundMessage
     return new InboundMessage('wamid.msg-'.uniqid(), 'wamid-booking-choice', '+573001234567', $text, now()->toImmutable());
 }
 
-function buildBookingChoiceAgent(ConversationDraftRepositoryInterface $drafts, array &$sent): BookingChoiceAgent
+function buildBookingChoiceAgent(ConversationDraftRepositoryInterface $drafts, array &$sent, AiServiceInterface $ai): BookingChoiceAgent
 {
-    return new BookingChoiceAgent($drafts, new EloquentConversationSessionRepository, bookingChoiceFakeNotificationSender($sent));
+    return new BookingChoiceAgent($drafts, new EloquentConversationSessionRepository, bookingChoiceFakeNotificationSender($sent), $ai);
 }
 
-test('el primer mensaje pregunta nueva o gestionar, sin decidir nada todavía', function () {
+test('el primer mensaje pregunta nueva o gestionar, sin decidir nada todavía ni llamar a la IA', function () {
     $organization = bookingChoiceFixtureOrganization();
     $session = bookingChoiceFixtureSession($organization);
     $drafts = bookingChoiceFakeDraftRepository();
     $sent = [];
-    $agent = buildBookingChoiceAgent($drafts, $sent);
+    $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceNeverCalledAi());
 
     $agent->handle(bookingChoiceFixtureMessage('quiero una cita para el 24'), $session, $organization);
 
@@ -97,12 +129,12 @@ test('el primer mensaje pregunta nueva o gestionar, sin decidir nada todavía', 
     expect($session->fresh()->current_intent)->toBeNull(); // todavía no se decidió nada
 });
 
-test('responder "nueva" arranca ReservaAgent desde su primera pregunta', function () {
+test('responder "nueva" sin fecha en el mensaje original pregunta la fecha normalmente', function () {
     $organization = bookingChoiceFixtureOrganization();
     $session = bookingChoiceFixtureSession($organization);
     $drafts = bookingChoiceFakeDraftRepository();
     $sent = [];
-    $agent = buildBookingChoiceAgent($drafts, $sent);
+    $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceQueuedAi(['NO_ENCONTRADO']));
 
     $agent->handle(bookingChoiceFixtureMessage('hola'), $session, $organization);
     $agent->handle(bookingChoiceFixtureMessage('nueva'), $session, $organization);
@@ -112,12 +144,31 @@ test('responder "nueva" arranca ReservaAgent desde su primera pregunta', functio
     expect($session->fresh()->current_intent)->toBe(Intent::Reserva->value);
 });
 
-test('responder "gestionar" deja el Intent en GestionReserva y limpia el draft', function () {
+test('responder "nueva" cuando el mensaje original ya tenía la fecha, la reaprovecha y salta directo a preguntar el nombre', function () {
+    // Caso real reportado: "Quiero crear una reserva para el 24" -> nueva/gestionar
+    // -> "nueva" -> no debería volver a preguntar la fecha que ya dio.
     $organization = bookingChoiceFixtureOrganization();
     $session = bookingChoiceFixtureSession($organization);
     $drafts = bookingChoiceFakeDraftRepository();
     $sent = [];
-    $agent = buildBookingChoiceAgent($drafts, $sent);
+    $targetDate = now()->addDays(4)->toDateString();
+    $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceQueuedAi([$targetDate]));
+
+    $agent->handle(bookingChoiceFixtureMessage('quiero crear una reserva para el 24'), $session, $organization);
+    $agent->handle(bookingChoiceFixtureMessage('nueva'), $session, $organization);
+
+    expect($sent[1]['message'])->toContain('nombre de quién');
+    expect($drafts->get($session)['_started'])->toBeTrue();
+    expect($drafts->get($session)['date']->toDateString())->toBe($targetDate);
+    expect($session->fresh()->current_intent)->toBe(Intent::Reserva->value);
+});
+
+test('responder "gestionar" deja el Intent en GestionReserva y limpia el draft, sin llamar a la IA', function () {
+    $organization = bookingChoiceFixtureOrganization();
+    $session = bookingChoiceFixtureSession($organization);
+    $drafts = bookingChoiceFakeDraftRepository();
+    $sent = [];
+    $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceNeverCalledAi());
 
     $agent->handle(bookingChoiceFixtureMessage('hola'), $session, $organization);
     $agent->handle(bookingChoiceFixtureMessage('gestionar'), $session, $organization);
@@ -126,12 +177,12 @@ test('responder "gestionar" deja el Intent en GestionReserva y limpia el draft',
     expect($session->fresh()->current_intent)->toBe(Intent::GestionReserva->value);
 });
 
-test('una respuesta que no es ni nueva ni gestionar vuelve a preguntar, sin decidir nada', function () {
+test('una respuesta que no es ni nueva ni gestionar vuelve a preguntar, sin decidir nada ni llamar a la IA', function () {
     $organization = bookingChoiceFixtureOrganization();
     $session = bookingChoiceFixtureSession($organization);
     $drafts = bookingChoiceFakeDraftRepository();
     $sent = [];
-    $agent = buildBookingChoiceAgent($drafts, $sent);
+    $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceNeverCalledAi());
 
     $agent->handle(bookingChoiceFixtureMessage('hola'), $session, $organization);
     $agent->handle(bookingChoiceFixtureMessage('no sé'), $session, $organization);
