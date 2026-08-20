@@ -14,7 +14,7 @@ use App\Domain\Conversational\Intent;
  * cambios al Router, tal como anticipa su docblock).
  *
  * Doble verificación antes de reclamar el Intent: (a) el texto matchea
- * exactamente uno de los 4 comandos, (b) quien escribe es el owner_phone de
+ * exactamente uno de los 5 comandos, (b) quien escribe es el owner_phone de
  * la Organization ya resuelta para esta sesión. Si (b) falla, esta
  * estrategia NO revela que el comando existe — devuelve null y deja que la
  * cadena siga con la clasificación normal por IA, para que un cliente
@@ -29,7 +29,7 @@ use App\Domain\Conversational\Intent;
  */
 class DeterministicAdminCommandStrategy implements IntentClassifierStrategy
 {
-    private const PATTERN = '/^(reservas\s+hoy|reservas\s+\d{1,2}\/\d{1,2}\/\d{4}|cancelar\s+\d+|confirmar\s+\d+)$/iu';
+    private const PATTERN = '/^(reservas\s+hoy|reservas\s+\d{1,2}\/\d{1,2}\/\d{4}|cancelar\s+\d+|confirmar\s+\d+|ausente\s+\d+)$/iu';
 
     public function attempt(InboundMessage $message, ConversationSession $session): ?Intent
     {

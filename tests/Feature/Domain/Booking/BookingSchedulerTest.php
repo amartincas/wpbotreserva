@@ -299,3 +299,49 @@ test('confirmar una reserva cancelada lanza BookingAlreadyTerminalException', fu
     expect(fn () => schedulerFor()->confirm($booking->fresh()))
         ->toThrow(BookingAlreadyTerminalException::class);
 });
+
+test('completar una reserva CONFIRMED la pasa a COMPLETED', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+
+    $completed = schedulerFor()->complete($booking);
+
+    expect($completed->status)->toBe(BookingStatus::COMPLETED);
+});
+
+test('completar una reserva cancelada lanza BookingAlreadyTerminalException', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    schedulerFor()->cancel($booking);
+
+    expect(fn () => schedulerFor()->complete($booking->fresh()))
+        ->toThrow(BookingAlreadyTerminalException::class);
+});
+
+test('marcar ausente una reserva CONFIRMED la pasa a NO_SHOW', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+
+    $marked = schedulerFor()->markNoShow($booking);
+
+    expect($marked->status)->toBe(BookingStatus::NO_SHOW);
+});
+
+test('marcar ausente una reserva ya COMPLETED también funciona — es la vía para corregir un auto-completado', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    schedulerFor()->complete($booking);
+
+    $marked = schedulerFor()->markNoShow($booking->fresh());
+
+    expect($marked->status)->toBe(BookingStatus::NO_SHOW);
+});
+
+test('marcar ausente una reserva cancelada lanza BookingAlreadyTerminalException — cancelar y no-show son hechos distintos', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    schedulerFor()->cancel($booking);
+
+    expect(fn () => schedulerFor()->markNoShow($booking->fresh()))
+        ->toThrow(BookingAlreadyTerminalException::class);
+});

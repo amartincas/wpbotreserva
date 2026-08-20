@@ -2,6 +2,7 @@
 
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\ConfirmBookingCommand;
+use App\Application\Booking\MarkBookingNoShowCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
 use App\Application\Contracts\NotificationSenderInterface;
@@ -98,6 +99,7 @@ function buildAdminCommandAgent(array &$sent): AdminCommandAgent
         adminAgentFakeNotificationSender($sent),
         new CancelBookingCommand(app(BookingSchedulerInterface::class)),
         new ConfirmBookingCommand(app(BookingSchedulerInterface::class)),
+        new MarkBookingNoShowCommand(app(BookingSchedulerInterface::class)),
     );
 }
 
@@ -224,6 +226,45 @@ test('"cancelar <id>" sobre una reserva ya terminal avisa en vez de romper', fun
     $agent = buildAdminCommandAgent($sent);
 
     $agent->handle(adminAgentFixtureMessage("cancelar {$booking->id}"), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('ya estaba en un estado terminal');
+});
+
+test('"ausente <id>" marca la reserva como NO_SHOW', function () {
+    $organization = adminAgentFixtureOrganization();
+    $booking = adminAgentFixtureBooking($organization, now()->addDay()->setTime(10, 0));
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage("ausente {$booking->id}"), $session, $organization);
+
+    expect($booking->fresh()->status)->toBe(BookingStatus::NO_SHOW);
+    expect($sent[0]['message'])->toContain("marqué la reserva #{$booking->id} como ausente");
+});
+
+test('"ausente <id>" también funciona sobre una reserva ya COMPLETED — corrige un auto-completado', function () {
+    $organization = adminAgentFixtureOrganization();
+    $booking = adminAgentFixtureBooking($organization, now()->addDay()->setTime(10, 0));
+    $booking->update(['status' => BookingStatus::COMPLETED]);
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage("ausente {$booking->id}"), $session, $organization);
+
+    expect($booking->fresh()->status)->toBe(BookingStatus::NO_SHOW);
+});
+
+test('"ausente <id>" sobre una reserva cancelada avisa en vez de romper', function () {
+    $organization = adminAgentFixtureOrganization();
+    $booking = adminAgentFixtureBooking($organization, now()->addDay()->setTime(10, 0));
+    (new CancelBookingCommand(app(BookingSchedulerInterface::class)))->handle($booking);
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage("ausente {$booking->id}"), $session, $organization);
 
     expect($sent[0]['message'])->toContain('ya estaba en un estado terminal');
 });

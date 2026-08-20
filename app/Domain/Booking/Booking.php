@@ -32,6 +32,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'cancelled_at',
     'cancellation_reason',
     'created_via',
+    'reminder_sent_at',
 ])]
 class Booking extends Model
 {
@@ -50,6 +51,7 @@ class Booking extends Model
             'status' => BookingStatus::class,
             'cancelled_at' => 'datetime',
             'created_via' => BookingCreatedVia::class,
+            'reminder_sent_at' => 'datetime',
         ];
     }
 

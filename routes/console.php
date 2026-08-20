@@ -11,3 +11,10 @@ Artisan::command('inspire', function () {
 // Backup diario de la base de datos (Parte XV) — corre dentro del contenedor
 // "scheduler" (docker-compose.yml), vía `php artisan schedule:work`.
 Schedule::command('backup:database')->dailyAt('03:00')->withoutOverlapping();
+
+// Recuerda al dueño turnos vencidos sin resolver y cierra por respaldo los
+// que llevan más de 7 días sin respuesta (Incremento 2) — sin esto,
+// GestionReservaAgent ofrece indefinidamente turnos cuya fecha ya pasó
+// como si siguieran activos. Diaria a las 9am: hora hábil, para que el
+// dueño vea el recordatorio de WhatsApp en un horario razonable.
+Schedule::command('bookings:review-past')->dailyAt('09:00')->withoutOverlapping();

@@ -179,6 +179,34 @@ class BookingScheduler implements BookingSchedulerInterface
         return $booking;
     }
 
+    public function complete(Booking $booking): Booking
+    {
+        if ($booking->isTerminal()) {
+            throw new BookingAlreadyTerminalException(
+                "La reserva #{$booking->id} ya está en un estado terminal ({$booking->status->value})."
+            );
+        }
+
+        $booking->update(['status' => BookingStatus::COMPLETED]);
+
+        return $booking;
+    }
+
+    public function markNoShow(Booking $booking): Booking
+    {
+        $allowedOrigins = [BookingStatus::CONFIRMED, BookingStatus::COMPLETED];
+
+        if (! in_array($booking->status, $allowedOrigins, true)) {
+            throw new BookingAlreadyTerminalException(
+                "La reserva #{$booking->id} ya está en un estado terminal ({$booking->status->value})."
+            );
+        }
+
+        $booking->update(['status' => BookingStatus::NO_SHOW]);
+
+        return $booking;
+    }
+
     private function resourceCanPerformService(Resource $resource, Service $service): bool
     {
         return $service->resources()->where('resources.id', $resource->id)->exists();

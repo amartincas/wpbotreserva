@@ -46,13 +46,14 @@ test('reconoce "reservas hoy" del dueño y devuelve Intent::AdminCommand', funct
     expect($intent)->toBe(Intent::AdminCommand);
 });
 
-test('reconoce "cancelar N" y "confirmar N" del dueño, sin importar mayúsculas/espacios', function () {
+test('reconoce "cancelar N", "confirmar N" y "ausente N" del dueño, sin importar mayúsculas/espacios', function () {
     $organization = adminStrategyFixtureOrganization();
     $session = adminStrategyFixtureSession($organization);
     $strategy = new DeterministicAdminCommandStrategy;
 
     expect($strategy->attempt(adminStrategyFixtureMessage('  CANCELAR   42  ', '+573009999999'), $session))->toBe(Intent::AdminCommand);
     expect($strategy->attempt(adminStrategyFixtureMessage('confirmar 7', '+573009999999'), $session))->toBe(Intent::AdminCommand);
+    expect($strategy->attempt(adminStrategyFixtureMessage('AUSENTE 3', '+573009999999'), $session))->toBe(Intent::AdminCommand);
 });
 
 test('reconoce "reservas dd/mm/aaaa" del dueño, con uno o dos dígitos de día/mes', function () {

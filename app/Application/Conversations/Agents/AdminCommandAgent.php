@@ -4,6 +4,7 @@ namespace App\Application\Conversations\Agents;
 
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\ConfirmBookingCommand;
+use App\Application\Booking\MarkBookingNoShowCommand;
 use App\Application\Contracts\AgentInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Domain\Booking\Booking;
@@ -32,6 +33,7 @@ class AdminCommandAgent implements AgentInterface
         private readonly NotificationSenderInterface $notifications,
         private readonly CancelBookingCommand $cancelBooking,
         private readonly ConfirmBookingCommand $confirmBooking,
+        private readonly MarkBookingNoShowCommand $markNoShowBooking,
     ) {}
 
     public function handle(InboundMessage $message, ConversationSession $session, Organization $organization): void
@@ -58,6 +60,12 @@ class AdminCommandAgent implements AgentInterface
 
         if (preg_match('/^confirmar\s+(\d+)$/iu', $text, $matches)) {
             $this->confirm($organization, $message->fromPhone, (int) $matches[1]);
+
+            return;
+        }
+
+        if (preg_match('/^ausente\s+(\d+)$/iu', $text, $matches)) {
+            $this->markNoShow($organization, $message->fromPhone, (int) $matches[1]);
 
             return;
         }
@@ -143,6 +151,35 @@ class AdminCommandAgent implements AgentInterface
         }
 
         $this->reply($organization, $toPhone, "Listo, confirmé la reserva #{$bookingId}.");
+    }
+
+    /**
+     * Único de los 3 comandos de mutación (junto con cancel/confirm) cuyo
+     * try/catch importa de verdad más allá de "no romper": si la reserva
+     * está CANCELLED, BookingAlreadyTerminalException es correcto (no tiene
+     * sentido marcar ausente algo que se canceló) — pero si está COMPLETED
+     * (el caso real que motivó este comando: revertir un auto-completado
+     * del respaldo de 7 días), markNoShow() la acepta sin problema.
+     */
+    private function markNoShow(Organization $organization, string $toPhone, int $bookingId): void
+    {
+        $booking = $organization->bookings()->find($bookingId);
+
+        if ($booking === null) {
+            $this->reply($organization, $toPhone, "No encontré la reserva #{$bookingId}.");
+
+            return;
+        }
+
+        try {
+            $this->markNoShowBooking->handle($booking);
+        } catch (BookingAlreadyTerminalException) {
+            $this->reply($organization, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
+
+            return;
+        }
+
+        $this->reply($organization, $toPhone, "Listo, marqué la reserva #{$bookingId} como ausente.");
     }
 
     /**
