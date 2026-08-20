@@ -4,7 +4,10 @@ namespace App\Domain\Booking;
 
 use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
+use App\Domain\Booking\Events\BookingCancelled;
 use App\Domain\Booking\Events\BookingConfirmed;
+use App\Domain\Booking\Events\BookingRescheduled;
+use App\Domain\Booking\Exceptions\BookingAlreadyTerminalException;
 use App\Domain\Booking\Exceptions\InvalidBookingRequestException;
 use App\Domain\Booking\Exceptions\SlotNoLongerAvailableException;
 use App\Domain\Booking\ValueObjects\AvailableSlot;
@@ -99,6 +102,81 @@ class BookingScheduler implements BookingSchedulerInterface
 
             return $booking;
         });
+    }
+
+    public function cancel(Booking $booking, ?string $reason = null): Booking
+    {
+        if ($booking->isTerminal()) {
+            throw new BookingAlreadyTerminalException(
+                "La reserva #{$booking->id} ya está en un estado terminal ({$booking->status->value})."
+            );
+        }
+
+        $booking->update([
+            'status' => BookingStatus::CANCELLED,
+            'cancelled_at' => now(),
+            'cancellation_reason' => $reason,
+        ]);
+
+        BookingCancelled::dispatch($booking->fresh(['bookingResources']));
+
+        return $booking;
+    }
+
+    public function reschedule(Booking $booking, CarbonImmutable $newStartsAt): Booking
+    {
+        if ($booking->isTerminal()) {
+            throw new BookingAlreadyTerminalException(
+                "La reserva #{$booking->id} ya está en un estado terminal ({$booking->status->value})."
+            );
+        }
+
+        $service = $booking->service;
+        $location = $booking->location;
+        $newEndsAt = $newStartsAt->addMinutes($service->duration_minutes);
+        $resource = $booking->bookingResources()->first()?->resource;
+
+        return DB::transaction(function () use ($booking, $service, $location, $newStartsAt, $newEndsAt, $resource) {
+            $previousStartsAt = CarbonImmutable::instance($booking->starts_at);
+
+            if ($resource) {
+                $lockedResource = $this->lockSpecificResourceIfAvailable($resource, $service, $location, $newStartsAt, $newEndsAt);
+
+                if (! $lockedResource) {
+                    throw new SlotNoLongerAvailableException('Ese horario ya no está disponible.');
+                }
+            } else {
+                // Mismo criterio que schedule(): sin recurso propio, serializa
+                // contra el Service mismo (Parte XI punto 1).
+                Service::whereKey($service->id)->lockForUpdate()->first();
+
+                if (! $this->isStillAvailable($service, $location, $newStartsAt, $newEndsAt, null)) {
+                    throw new SlotNoLongerAvailableException('Ese horario ya no está disponible.');
+                }
+            }
+
+            $booking->update(['starts_at' => $newStartsAt, 'ends_at' => $newEndsAt]);
+
+            BookingRescheduled::dispatch($booking->fresh(['bookingResources']), $previousStartsAt);
+
+            return $booking;
+        });
+    }
+
+    public function confirm(Booking $booking): Booking
+    {
+        if ($booking->isTerminal()) {
+            throw new BookingAlreadyTerminalException(
+                "La reserva #{$booking->id} ya está en un estado terminal ({$booking->status->value})."
+            );
+        }
+
+        if ($booking->status === BookingStatus::PENDING) {
+            $booking->update(['status' => BookingStatus::CONFIRMED]);
+            BookingConfirmed::dispatch($booking->fresh(['bookingResources']));
+        }
+
+        return $booking;
     }
 
     private function resourceCanPerformService(Resource $resource, Service $service): bool

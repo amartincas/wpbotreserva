@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Application\Booking\Listeners\SendBookingCancellationNotification;
 use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
+use App\Application\Booking\Listeners\SendBookingRescheduleNotification;
 use App\Application\Channels\PhoneNumberIdChannelResolver;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\ChannelResolverInterface;
@@ -12,6 +14,8 @@ use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\IntentClassifierInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
+use App\Application\Conversations\Agents\AdminCommandAgent;
+use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
 use App\Application\Conversations\Agents\ReservaAgent;
@@ -19,6 +23,7 @@ use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\Classification\AiIntentClassifierStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
+use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\CacheConversationDraftRepository;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
@@ -30,7 +35,9 @@ use App\Domain\Booking\AvailabilityCalculator;
 use App\Domain\Booking\BookingScheduler;
 use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
+use App\Domain\Booking\Events\BookingCancelled;
 use App\Domain\Booking\Events\BookingConfirmed;
+use App\Domain\Booking\Events\BookingRescheduled;
 use App\Domain\Conversational\Intent;
 use App\Livewire\WhatsAppChatCenter;
 use App\Services\AI\GeminiService;
@@ -83,11 +90,12 @@ class AppServiceProvider extends ServiceProvider
         });
 
         // Orden explícito (Parte IX punto 3: clases explícitas, no un
-        // registro dinámico) — continuidad de conversación antes que IA.
-        // Agregar comandos admin determinista (Incremento 2) es insertar una
-        // estrategia más acá, sin tocar el composite ni el Router.
+        // registro dinámico) — comandos admin deterministas primero (cero
+        // costo de IA, coincidencia exacta), luego continuidad de
+        // conversación, IA como último recurso.
         $this->app->bind(IntentClassifierInterface::class, function () {
             return new CompositeIntentClassifier([
+                $this->app->make(DeterministicAdminCommandStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
                 $this->app->make(AiIntentClassifierStrategy::class),
             ]);
@@ -101,6 +109,8 @@ class AppServiceProvider extends ServiceProvider
                 Intent::FueraDeAlcance->value => $this->app->make(OutOfScopeAgent::class),
                 Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
                 Intent::Reserva->value => $this->app->make(ReservaAgent::class),
+                Intent::GestionReserva->value => $this->app->make(GestionReservaAgent::class),
+                Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
             ]);
         });
     }
@@ -127,6 +137,8 @@ class AppServiceProvider extends ServiceProvider
         // de Application, no en app/Listeners (fuera del auto-discovery de
         // Laravel porque el listener vive bajo app/Application).
         Event::listen(BookingConfirmed::class, SendBookingConfirmationNotification::class);
+        Event::listen(BookingCancelled::class, SendBookingCancellationNotification::class);
+        Event::listen(BookingRescheduled::class, SendBookingRescheduleNotification::class);
     }
 
     /**

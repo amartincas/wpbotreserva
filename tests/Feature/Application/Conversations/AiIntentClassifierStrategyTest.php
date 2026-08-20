@@ -78,6 +78,14 @@ test('clasifica reserva a partir de la respuesta de la IA', function () {
     expect($intent)->toBe(Intent::Reserva);
 });
 
+test('clasifica gestion_reserva a partir de la respuesta de la IA', function () {
+    $strategy = new AiIntentClassifierStrategy(aiClassifierFakeService('gestion_reserva'));
+
+    $intent = $strategy->attempt(aiClassifierFixtureMessage('quiero cancelar mi turno'), aiClassifierFixtureSession());
+
+    expect($intent)->toBe(Intent::GestionReserva);
+});
+
 test('normaliza mayúsculas y espacios de la respuesta de la IA', function () {
     $strategy = new AiIntentClassifierStrategy(aiClassifierFakeService('  RESERVA  '));
 

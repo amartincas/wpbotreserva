@@ -3,7 +3,10 @@
 use App\Domain\Booking\AvailabilityCalculator;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\BookingScheduler;
+use App\Domain\Booking\Events\BookingCancelled;
 use App\Domain\Booking\Events\BookingConfirmed;
+use App\Domain\Booking\Events\BookingRescheduled;
+use App\Domain\Booking\Exceptions\BookingAlreadyTerminalException;
 use App\Domain\Booking\Exceptions\InvalidBookingRequestException;
 use App\Domain\Booking\Exceptions\SlotNoLongerAvailableException;
 use App\Domain\CRM\Customer;
@@ -191,4 +194,108 @@ test('capacity_per_slot permite una segunda reserva simultánea y rechaza la que
 
     expect(fn () => schedulerFor()->schedule($svc, $location, $customerC, $startsAt))
         ->toThrow(SlotNoLongerAvailableException::class);
+});
+
+test('cancelar una reserva confirmada la pasa a CANCELLED, registra el motivo y dispara BookingCancelled', function () {
+    Event::fake([BookingCancelled::class]);
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+
+    $cancelled = schedulerFor()->cancel($booking, 'El cliente ya no puede asistir');
+
+    expect($cancelled->status)->toBe(BookingStatus::CANCELLED);
+    expect($cancelled->cancellation_reason)->toBe('El cliente ya no puede asistir');
+    expect($cancelled->cancelled_at)->not->toBeNull();
+    Event::assertDispatched(BookingCancelled::class, fn ($event) => $event->booking->is($booking));
+});
+
+test('cancelar el horario libera el slot para una reserva nueva en el mismo momento', function () {
+    $f = schedulerFixtures();
+    $startsAt = schedulerDate()->setTime(10, 0);
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $startsAt, $f['resource']);
+
+    schedulerFor()->cancel($booking);
+
+    $second = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $startsAt, $f['resource']);
+    expect($second->exists)->toBeTrue();
+});
+
+test('cancelar una reserva ya cancelada lanza BookingAlreadyTerminalException', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    schedulerFor()->cancel($booking);
+
+    expect(fn () => schedulerFor()->cancel($booking->fresh()))->toThrow(BookingAlreadyTerminalException::class);
+});
+
+test('reprogramar mueve la reserva al nuevo horario, mantiene el mismo id y dispara BookingRescheduled con la fecha anterior', function () {
+    Event::fake([BookingRescheduled::class]);
+    $f = schedulerFixtures();
+    $originalStart = schedulerDate()->setTime(10, 0);
+    $newStart = schedulerDate()->setTime(11, 0);
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $originalStart, $f['resource']);
+
+    $rescheduled = schedulerFor()->reschedule($booking, $newStart);
+
+    expect($rescheduled->id)->toBe($booking->id);
+    expect($rescheduled->starts_at->format('H:i'))->toBe('11:00');
+    expect($rescheduled->ends_at->format('H:i'))->toBe('11:30');
+    expect($rescheduled->status)->toBe(BookingStatus::CONFIRMED);
+    Event::assertDispatched(BookingRescheduled::class, function ($event) use ($booking, $originalStart) {
+        return $event->booking->is($booking) && $event->previousStartsAt->equalTo($originalStart);
+    });
+});
+
+test('reprogramar a un horario ya ocupado por otra reserva lanza SlotNoLongerAvailableException y no mueve nada', function () {
+    $f = schedulerFixtures(resourceCount: 1);
+    $firstStart = schedulerDate()->setTime(10, 0);
+    $secondStart = schedulerDate()->setTime(10, 30);
+    $first = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $firstStart, $f['resource']);
+    schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $secondStart, $f['resource']);
+
+    expect(fn () => schedulerFor()->reschedule($first, $secondStart))
+        ->toThrow(SlotNoLongerAvailableException::class);
+
+    expect($first->fresh()->starts_at->format('H:i'))->toBe('10:00');
+});
+
+test('reprogramar una reserva cancelada lanza BookingAlreadyTerminalException', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    schedulerFor()->cancel($booking);
+
+    expect(fn () => schedulerFor()->reschedule($booking->fresh(), schedulerDate()->setTime(11, 0)))
+        ->toThrow(BookingAlreadyTerminalException::class);
+});
+
+test('confirmar una reserva PENDING la pasa a CONFIRMED y dispara BookingConfirmed', function () {
+    Event::fake([BookingConfirmed::class]);
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    $booking->update(['status' => BookingStatus::PENDING]);
+    Event::fake([BookingConfirmed::class]); // limpia el disparo de schedule() de arriba, solo interesa el de confirm()
+
+    $confirmed = schedulerFor()->confirm($booking->fresh());
+
+    expect($confirmed->status)->toBe(BookingStatus::CONFIRMED);
+    Event::assertDispatched(BookingConfirmed::class, fn ($event) => $event->booking->is($booking));
+});
+
+test('confirmar una reserva que ya estaba CONFIRMED es idempotente y no vuelve a disparar el evento', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    Event::fake([BookingConfirmed::class]);
+
+    schedulerFor()->confirm($booking->fresh());
+
+    Event::assertNotDispatched(BookingConfirmed::class);
+});
+
+test('confirmar una reserva cancelada lanza BookingAlreadyTerminalException', function () {
+    $f = schedulerFixtures();
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], schedulerDate()->setTime(10, 0), $f['resource']);
+    schedulerFor()->cancel($booking);
+
+    expect(fn () => schedulerFor()->confirm($booking->fresh()))
+        ->toThrow(BookingAlreadyTerminalException::class);
 });
