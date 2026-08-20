@@ -36,7 +36,9 @@ function reviewPastFakeNotificationSender(array &$sent): NotificationSenderInter
 
         public function send(Organization $organization, string $toPhoneE164, string $message): void
         {
-            throw new RuntimeException('El aviso al owner ahora es una plantilla aprobada, no texto libre.');
+            // No-op: la confirmación de reserva al crear la fixture pasa por
+            // acá (SendBookingConfirmationNotification), no por el código
+            // bajo prueba — solo sendTemplate() es lo que este test observa.
         }
 
         public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void
