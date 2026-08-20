@@ -135,7 +135,15 @@ class AppServiceProvider extends ServiceProvider
 
         Schema::defaultStringLength(191);
 
-        if (app()->environment('production') || env('FORCE_HTTPS')) {
+        // Antes solo miraba environment('production') — en staging (detrás
+        // de Nginx Proxy Manager, que termina TLS y reenvía HTTP plano sin
+        // headers de proxy confiable) esa condición nunca se cumplía, así
+        // que Laravel generaba URLs de assets en http:// aunque el sitio
+        // real fuera https://, y el navegador las bloqueaba por contenido
+        // mixto. Se basa en el esquema real de APP_URL en vez de una lista
+        // fija de nombres de entorno, así que aplica igual en cualquier
+        // entorno que esté configurado para servir por HTTPS.
+        if (env('FORCE_HTTPS') || str_starts_with((string) config('app.url'), 'https://')) {
             URL::forceScheme('https');
         }
 
