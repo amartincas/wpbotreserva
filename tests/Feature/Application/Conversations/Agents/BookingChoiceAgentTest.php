@@ -144,9 +144,11 @@ test('responder "nueva" sin fecha en el mensaje original pregunta la fecha norma
     expect($session->fresh()->current_intent)->toBe(Intent::Reserva->value);
 });
 
-test('responder "nueva" cuando el mensaje original ya tenía la fecha, la reaprovecha y salta directo a preguntar el nombre', function () {
-    // Caso real reportado: "Quiero crear una reserva para el 24" -> nueva/gestionar
-    // -> "nueva" -> no debería volver a preguntar la fecha que ya dio.
+test('responder "nueva" cuando el mensaje original ya tenía una fecha SIN ambigüedad, la reaprovecha y salta directo a preguntar el nombre', function () {
+    // Con mes explícito ("24 de agosto"), no un día suelto — un día suelto
+    // ("para el 24") es justamente el caso ambiguo que DateFieldExtractor
+    // ahora corta antes de la IA (ver DateFieldExtractorTest), así que acá
+    // no debería resolverse solo con el número.
     $organization = bookingChoiceFixtureOrganization();
     $session = bookingChoiceFixtureSession($organization);
     $drafts = bookingChoiceFakeDraftRepository();
@@ -154,7 +156,7 @@ test('responder "nueva" cuando el mensaje original ya tenía la fecha, la reapro
     $targetDate = now()->addDays(4)->toDateString();
     $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceQueuedAi([$targetDate]));
 
-    $agent->handle(bookingChoiceFixtureMessage('quiero crear una reserva para el 24'), $session, $organization);
+    $agent->handle(bookingChoiceFixtureMessage('quiero crear una reserva para el 24 de agosto'), $session, $organization);
     $agent->handle(bookingChoiceFixtureMessage('nueva'), $session, $organization);
 
     expect($sent[1]['message'])->toContain('nombre de quién');
