@@ -55,6 +55,23 @@ test('reconoce "cancelar N" y "confirmar N" del dueño, sin importar mayúsculas
     expect($strategy->attempt(adminStrategyFixtureMessage('confirmar 7', '+573009999999'), $session))->toBe(Intent::AdminCommand);
 });
 
+test('reconoce "reservas dd/mm/aaaa" del dueño, con uno o dos dígitos de día/mes', function () {
+    $organization = adminStrategyFixtureOrganization();
+    $session = adminStrategyFixtureSession($organization);
+    $strategy = new DeterministicAdminCommandStrategy;
+
+    expect($strategy->attempt(adminStrategyFixtureMessage('reservas 22/08/2026', '+573009999999'), $session))->toBe(Intent::AdminCommand);
+    expect($strategy->attempt(adminStrategyFixtureMessage('Reservas 2/8/2026', '+573009999999'), $session))->toBe(Intent::AdminCommand);
+});
+
+test('"reservas" con una fecha con forma inválida (no dd/mm/aaaa) no matchea', function () {
+    $organization = adminStrategyFixtureOrganization();
+    $session = adminStrategyFixtureSession($organization);
+    $strategy = new DeterministicAdminCommandStrategy;
+
+    expect($strategy->attempt(adminStrategyFixtureMessage('reservas 2026-08-22', '+573009999999'), $session))->toBeNull();
+});
+
 test('un mensaje que no matchea ningún comando devuelve null, incluso viniendo del dueño', function () {
     $organization = adminStrategyFixtureOrganization();
     $session = adminStrategyFixtureSession($organization);

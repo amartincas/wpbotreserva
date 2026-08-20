@@ -11,6 +11,7 @@ use App\Domain\Booking\Exceptions\BookingAlreadyTerminalException;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Tenancy\Organization;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 
 /**
@@ -38,7 +39,13 @@ class AdminCommandAgent implements AgentInterface
         $text = trim($message->text);
 
         if (preg_match('/^reservas\s+hoy$/iu', $text)) {
-            $this->listToday($organization, $message->fromPhone);
+            $this->listForDate($organization, $message->fromPhone, now()->toImmutable(), 'hoy');
+
+            return;
+        }
+
+        if (preg_match('/^reservas\s+(\d{1,2})\/(\d{1,2})\/(\d{4})$/iu', $text, $matches)) {
+            $this->listForRequestedDate($organization, $message->fromPhone, (int) $matches[1], (int) $matches[2], (int) $matches[3]);
 
             return;
         }
@@ -61,20 +68,39 @@ class AdminCommandAgent implements AgentInterface
         $this->reply($organization, $message->fromPhone, 'Comando no reconocido.');
     }
 
-    private function listToday(Organization $organization, string $toPhone): void
+    /**
+     * checkdate() (no Carbon::createFromFormat) a propósito: Carbon es
+     * permisivo con fechas fuera de rango (ej. 31/02 rueda a marzo) —
+     * checkdate() es la validación de calendario real de PHP, exactamente
+     * lo que hace falta antes de aceptar una fecha que un dueño tipeó a mano.
+     */
+    private function listForRequestedDate(Organization $organization, string $toPhone, int $day, int $month, int $year): void
     {
-        $bookings = $organization->bookings()
-            ->whereDate('starts_at', now()->toDateString())
-            ->orderBy('starts_at')
-            ->get();
-
-        if ($bookings->isEmpty()) {
-            $this->reply($organization, $toPhone, 'No tenés reservas para hoy.');
+        if (! checkdate($month, $day, $year)) {
+            $this->reply($organization, $toPhone, 'Esa fecha no es válida. Usá el formato dd/mm/aaaa.');
 
             return;
         }
 
-        $this->reply($organization, $toPhone, "Reservas de hoy:\n\n".$this->formatBookingList($bookings));
+        $date = CarbonImmutable::create($year, $month, $day);
+
+        $this->listForDate($organization, $toPhone, $date, $date->format('d/m/Y'));
+    }
+
+    private function listForDate(Organization $organization, string $toPhone, CarbonImmutable $date, string $label): void
+    {
+        $bookings = $organization->bookings()
+            ->whereDate('starts_at', $date->toDateString())
+            ->orderBy('starts_at')
+            ->get();
+
+        if ($bookings->isEmpty()) {
+            $this->reply($organization, $toPhone, "No tenés reservas para {$label}.");
+
+            return;
+        }
+
+        $this->reply($organization, $toPhone, "Reservas de {$label}:\n\n".$this->formatBookingList($bookings));
     }
 
     private function cancel(Organization $organization, string $toPhone, int $bookingId): void

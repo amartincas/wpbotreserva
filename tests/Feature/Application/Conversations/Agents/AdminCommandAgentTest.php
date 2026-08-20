@@ -126,6 +126,43 @@ test('"reservas hoy" lista las reservas de hoy con id, hora, servicio y cliente'
     expect($sent[0]['message'])->toContain('Ana');
 });
 
+test('"reservas dd/mm/aaaa" lista las reservas de esa fecha específica, no las de hoy', function () {
+    $organization = adminAgentFixtureOrganization();
+    adminAgentFixtureBooking($organization, now()->setTime(10, 0)); // hoy, no debería aparecer
+    $target = now()->addDays(5);
+    adminAgentFixtureBooking($organization, $target->setTime(11, 0));
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage('reservas '.$target->format('d/m/Y')), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('11:00');
+    expect($sent[0]['message'])->not->toContain('10:00');
+});
+
+test('"reservas dd/mm/aaaa" sin reservas ese día avisa con la fecha pedida', function () {
+    $organization = adminAgentFixtureOrganization();
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage('reservas 22/08/2026'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('No tenés reservas para 22/08/2026');
+});
+
+test('"reservas dd/mm/aaaa" con una fecha que no existe en el calendario avisa sin romper', function () {
+    $organization = adminAgentFixtureOrganization();
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage('reservas 31/02/2026'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('no es válida');
+});
+
 test('"cancelar <id>" cancela la reserva de esta organización', function () {
     $organization = adminAgentFixtureOrganization();
     $booking = adminAgentFixtureBooking($organization, now()->addDay()->setTime(10, 0));

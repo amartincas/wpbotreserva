@@ -14,17 +14,22 @@ use App\Domain\Conversational\Intent;
  * cambios al Router, tal como anticipa su docblock).
  *
  * Doble verificación antes de reclamar el Intent: (a) el texto matchea
- * exactamente uno de los 3 comandos, (b) quien escribe es el owner_phone de
+ * exactamente uno de los 4 comandos, (b) quien escribe es el owner_phone de
  * la Organization ya resuelta para esta sesión. Si (b) falla, esta
  * estrategia NO revela que el comando existe — devuelve null y deja que la
  * cadena siga con la clasificación normal por IA, para que un cliente
  * cualquiera que tipee "cancelar 5" por coincidencia reciba una respuesta
  * conversacional normal, no un mensaje de "no autorizado" que delataría la
  * existencia de esta capa.
+ *
+ * "reservas dd/mm/aaaa" valida solo la FORMA acá (dígitos en las posiciones
+ * correctas) — si la fecha es real (ej. 31/02 no existe) lo valida
+ * AdminCommandAgent con checkdate(), no esta clase: el classifier nunca
+ * hace más que reconocer el patrón, la lógica de negocio vive en el Agent.
  */
 class DeterministicAdminCommandStrategy implements IntentClassifierStrategy
 {
-    private const PATTERN = '/^(reservas\s+hoy|cancelar\s+\d+|confirmar\s+\d+)$/iu';
+    private const PATTERN = '/^(reservas\s+hoy|reservas\s+\d{1,2}\/\d{1,2}\/\d{4}|cancelar\s+\d+|confirmar\s+\d+)$/iu';
 
     public function attempt(InboundMessage $message, ConversationSession $session): ?Intent
     {
