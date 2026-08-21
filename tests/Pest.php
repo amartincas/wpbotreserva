@@ -5,6 +5,36 @@ use Tests\TestCase;
 
 /*
 |--------------------------------------------------------------------------
+| Guarda dura: nunca correr contra una base que no sea de test
+|--------------------------------------------------------------------------
+|
+| Incidente real (2026-08-20 y de nuevo el 2026-08-21): phpunit.xml
+| declaraba DB_DATABASE=wpbotreserva_test con force="true", pero en la
+| práctica el proceso siguió conectándose a la base real de staging —
+| confirmado corriendo un test que imprimía DB::connection()->getDatabaseName()
+| y daba "wpbotreserva", no "wpbotreserva_test". No investigar más por qué
+| force="true" no alcanzó — la garantía tiene que vivir en un lugar que no
+| dependa de que esa precedencia de PHPUnit funcione como se espera.
+|
+| Este chequeo corre ANTES de que Pest registre RefreshDatabase (que es
+| justamente lo que borra/re-migra todo) — es la primera línea de código
+| de todo el archivo, a propósito. Revisa el valor crudo de entorno
+| (getenv/$_ENV/$_SERVER, las tres fuentes posibles) sin pasar por
+| Laravel/config — así funciona incluso si el bug real terminara siendo
+| algo en la capa de config, no solo en el entorno.
+|
+*/
+$__dbDatabase = getenv('DB_DATABASE') ?: ($_ENV['DB_DATABASE'] ?? ($_SERVER['DB_DATABASE'] ?? null));
+
+if ($__dbDatabase !== 'wpbotreserva_test') {
+    fwrite(STDERR, "\n\n¡ABORTADO! DB_DATABASE resolvió a \"{$__dbDatabase}\", no \"wpbotreserva_test\".\n");
+    fwrite(STDERR, "Correr los tests así arriesga borrar datos reales (RefreshDatabase). No continuar.\n\n");
+    exit(1);
+}
+unset($__dbDatabase);
+
+/*
+|--------------------------------------------------------------------------
 | Test Case
 |--------------------------------------------------------------------------
 |
