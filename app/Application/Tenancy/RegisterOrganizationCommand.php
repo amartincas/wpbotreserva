@@ -43,51 +43,64 @@ class RegisterOrganizationCommand
                 'address' => $data->address,
             ]);
 
-            $this->ensureEntitled($organization, 'scheduling.max_resources');
-            $resource = Resource::create([
-                'organization_id' => $organization->id,
-                'location_id' => $location->id,
-                'resource_type' => ResourceType::HUMAN,
-                'display_name' => $data->resourceName,
-            ]);
-
-            $this->ensureEntitled($organization, 'scheduling.max_services');
-            $service = Service::create([
-                'organization_id' => $organization->id,
-                'name' => $data->serviceName,
-                'duration_minutes' => $data->serviceDurationMinutes,
-            ]);
-
-            ServiceResourceRequirement::create([
-                'service_id' => $service->id,
-                'resource_type' => ResourceType::HUMAN,
-                'quantity' => 1,
-            ]);
-
-            $service->resources()->attach($resource->id);
-
-            foreach ($data->weeklySchedule as $slot) {
-                ResourceSchedule::create([
-                    'resource_id' => $resource->id,
-                    'weekday' => $slot->weekday,
-                    'start_time' => $slot->startTime,
-                    'end_time' => $slot->endTime,
+            $this->ensureEntitled($organization, 'scheduling.max_resources', count($data->resources));
+            $resourceIds = [];
+            foreach ($data->resources as $resourceData) {
+                $resource = Resource::create([
+                    'organization_id' => $organization->id,
+                    'location_id' => $location->id,
+                    'resource_type' => ResourceType::HUMAN,
+                    'display_name' => $resourceData->name,
                 ]);
+
+                foreach ($resourceData->weeklySchedule as $slot) {
+                    ResourceSchedule::create([
+                        'resource_id' => $resource->id,
+                        'weekday' => $slot->weekday,
+                        'start_time' => $slot->startTime,
+                        'end_time' => $slot->endTime,
+                    ]);
+                }
+
+                $resourceIds[] = $resource->id;
+            }
+
+            $this->ensureEntitled($organization, 'scheduling.max_services', count($data->services));
+            $serviceIds = [];
+            foreach ($data->services as $serviceData) {
+                $service = Service::create([
+                    'organization_id' => $organization->id,
+                    'name' => $serviceData->name,
+                    'duration_minutes' => $serviceData->durationMinutes,
+                ]);
+
+                ServiceResourceRequirement::create([
+                    'service_id' => $service->id,
+                    'resource_type' => ResourceType::HUMAN,
+                    'quantity' => 1,
+                ]);
+
+                // Todo recurso presta todo servicio (ver nota en
+                // RegisterOrganizationData) — asignación fina por
+                // conversación queda para cuando un piloto real lo pida.
+                $service->resources()->attach($resourceIds);
+
+                $serviceIds[] = $service->id;
             }
 
             return new RegisterOrganizationResult(
                 organizationId: $organization->id,
                 organizationName: $organization->name,
                 locationId: $location->id,
-                resourceId: $resource->id,
-                serviceId: $service->id,
+                resourceIds: $resourceIds,
+                serviceIds: $serviceIds,
             );
         });
     }
 
-    private function ensureEntitled(Organization $organization, string $entitlementKey): void
+    private function ensureEntitled(Organization $organization, string $entitlementKey, int $requestedQuantity = 1): void
     {
-        if (! $this->entitlements->check($organization, $entitlementKey)) {
+        if (! $this->entitlements->check($organization, $entitlementKey, $requestedQuantity)) {
             throw new EntitlementDeniedException(
                 "La organización #{$organization->id} alcanzó el límite de «{$entitlementKey}» de su plan."
             );

@@ -10,6 +10,8 @@ use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
+use App\Application\Tenancy\ResourceRegistrationData;
+use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Booking\Booking;
@@ -119,13 +121,47 @@ function reservaFixtureOrganization(string $phoneNumberId = 'wamid-reserva'): Or
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        serviceName: 'Corte de cabello',
-        serviceDurationMinutes: 30,
-        resourceName: 'Carlos',
-        weeklySchedule: array_map(
+        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
             range(0, 6)
-        ),
+        ))],
+    ));
+
+    return Organization::findOrFail($result->organizationId);
+}
+
+/**
+ * Incremento 4: negocio con más de un Service, para probar la pregunta de
+ * "¿qué servicio querés?" que ReservaAgent solo hace cuando hay más de
+ * uno — un único Resource alcanza (RegisterOrganizationCommand cruza todo
+ * recurso con todo servicio automáticamente, así que Carlos ya presta
+ * ambos servicios).
+ */
+function reservaFixtureOrganizationMultiService(string $phoneNumberId = 'wamid-reserva-multi'): Organization
+{
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => $phoneNumberId,
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+    $result = $command->handle(new RegisterOrganizationData(
+        organizationName: 'Barbería Don Carlos',
+        ownerPhone: '+573009999999',
+        channel: $channel,
+        city: 'Bogotá',
+        address: 'Cra 7 # 45-12',
+        services: [
+            new ServiceRegistrationData('Corte de cabello', 30),
+            new ServiceRegistrationData('Barba', 20),
+        ],
+        resources: [new ResourceRegistrationData('Carlos', array_map(
+            fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
+            range(0, 6)
+        ))],
     ));
 
     return Organization::findOrFail($result->organizationId);
@@ -365,6 +401,75 @@ test('si la confirmación no es un sí, vuelve a pedir confirmación sin crear l
 
     expect(Booking::count())->toBe(0);
     expect($drafts->get($session)['_awaiting_confirmation'])->toBeTrue();
+});
+
+test('Incremento 4: si el negocio tiene más de un servicio, el primer mensaje pregunta cuál en vez de la fecha, sin llamar a la IA', function () {
+    $organization = reservaFixtureOrganizationMultiService();
+    $session = reservaFixtureSession($organization);
+    $drafts = reservaFakeDraftRepository();
+    $sent = [];
+    $agent = buildReservaAgent($drafts, $sent, reservaNeverCalledAi());
+
+    $agent->handle(reservaFixtureMessage('hola quiero un turno'), $session, $organization);
+
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('servicio');
+    expect($sent[0]['message'])->toContain('Corte de cabello');
+    expect($sent[0]['message'])->toContain('Barba');
+    expect($drafts->get($session)['_awaiting_service_selection'])->toBeTrue();
+    expect($drafts->get($session))->not->toHaveKey('_started');
+});
+
+test('elegir un servicio válido por número avanza a preguntar la fecha', function () {
+    $organization = reservaFixtureOrganizationMultiService();
+    $session = reservaFixtureSession($organization);
+    $drafts = reservaFakeDraftRepository();
+    $sent = [];
+    $agent = buildReservaAgent($drafts, $sent, reservaNeverCalledAi());
+
+    $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('2'), $session, $organization); // Barba
+
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('qué día');
+    $barba = $organization->services()->where('name', 'Barba')->firstOrFail();
+    expect($drafts->get($session)['serviceId'])->toBe($barba->id);
+    expect($drafts->get($session)['_started'])->toBeTrue();
+});
+
+test('una selección de servicio inválida re-pregunta sin avanzar', function () {
+    $organization = reservaFixtureOrganizationMultiService();
+    $session = reservaFixtureSession($organization);
+    $drafts = reservaFakeDraftRepository();
+    $sent = [];
+    $agent = buildReservaAgent($drafts, $sent, reservaNeverCalledAi());
+
+    $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('no sé cuál'), $session, $organization);
+
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('No entendí la opción');
+    expect($drafts->get($session)['_awaiting_service_selection'])->toBeTrue();
+});
+
+test('al confirmar, la reserva queda creada contra el servicio elegido, no el primero', function () {
+    $organization = reservaFixtureOrganizationMultiService();
+    $session = reservaFixtureSession($organization);
+    $drafts = reservaFakeDraftRepository();
+    $sent = [];
+    $tomorrow = now()->addDay()->toDateString();
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$tomorrow, 'Ana']));
+
+    $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('2'), $session, $organization); // Barba
+    $agent->handle(reservaFixtureMessage('mañana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('Ana'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('1'), $session, $organization);
+    $agent->handle(reservaFixtureMessage('sí'), $session, $organization);
+
+    expect(Booking::count())->toBe(1);
+    expect(Booking::first()->service->name)->toBe('Barba');
+    expect(Booking::first()->duration_minutes)->toBe(20);
 });
 
 test('si el horario se ocupa justo antes de confirmar, avisa y reinicia el draft en vez de crear una reserva inconsistente', function () {

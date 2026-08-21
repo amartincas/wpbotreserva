@@ -81,11 +81,34 @@ class BookingChoiceAgent implements AgentInterface
 
         // Reintenta extraer la fecha del mensaje ORIGINAL (el que disparó la
         // pregunta de desambiguación, no la respuesta "nueva") — si ya la
-        // dijo ahí, salta directo a preguntar el nombre en vez de pedirle
-        // la fecha de nuevo. Mismo DateFieldExtractor que usa ReservaAgent,
-        // así que el resultado (o el fallo) es idéntico al que tendría si
-        // hubiera llegado directo a ese Agent.
+        // dijo ahí, se la deja pre-cargada en el draft para que ReservaAgent
+        // no vuelva a pedirla (ConversationalFlowRunner salta cualquier
+        // FlowStep cuya key ya esté en el draft). Mismo DateFieldExtractor
+        // que usa ReservaAgent, así que el resultado (o el fallo) es
+        // idéntico al que tendría si hubiera llegado directo a ese Agent.
         $result = $this->dateExtractor->extract($originalText, []);
+        $prefilled = $result->successful ? ['date' => $result->value] : [];
+
+        // Incremento 4: si el negocio tiene más de un Service, hay que
+        // preguntar cuál ANTES de fecha/nombre — no se puede saltar directo.
+        // Deja el draft en el mismo estado que ReservaAgent::askServiceSelection()
+        // dejaría (_awaiting_service_selection + _serviceOptions, más la
+        // fecha ya precargada si se pudo extraer), para que el próximo
+        // mensaje del cliente lo resuelva ReservaAgent::handleServiceSelection()
+        // sin que este Agent necesite conocer esa lógica en detalle.
+        $services = $organization->services()->orderBy('id')->get();
+
+        if ($services->count() > 1) {
+            $this->drafts->put($session, [
+                ...$prefilled,
+                '_awaiting_service_selection' => true,
+                '_serviceOptions' => $services->pluck('id')->all(),
+            ]);
+            $options = $services->values()->map(fn ($service, int $i) => ($i + 1).') '.$service->name)->implode("\n");
+            $this->reply($organization, $toPhone, "¿Qué servicio querés?\n\n{$options}\n\nRespondé con el número.");
+
+            return;
+        }
 
         if ($result->successful) {
             $this->drafts->put($session, ['_started' => true, 'date' => $result->value]);

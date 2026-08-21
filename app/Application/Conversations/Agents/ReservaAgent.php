@@ -20,6 +20,7 @@ use App\Domain\Booking\Exceptions\SlotNoLongerAvailableException;
 use App\Domain\Booking\ValueObjects\AvailableSlot;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
+use App\Domain\Scheduling\Service;
 use App\Domain\Tenancy\Organization;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -30,13 +31,18 @@ use Illuminate\Support\Collection;
  * (a diferencia de RegistroNegocioAgent, que es la excepción). Reutiliza
  * toda la infraestructura conversacional del Hito 5 sin cambiarla.
  *
- * Alcance MVP (Parte XII): cada Organization tiene exactamente un Location,
- * un Service y un Resource (creados así por RegisterOrganizationCommand) —
- * no hace falta preguntar cuál, solo cuándo y a nombre de quién. Ofrecer
- * horarios y confirmar son fases propias del Agent, no del Runner —
- * presentar una lista dinámica de opciones no es lo mismo que pedir un
- * campo declarativo, y forzarlo dentro de FlowStep habría sido la
- * abstracción prematura que veníamos evitando.
+ * Alcance MVP (Parte XII): cada Organization tiene exactamente un Location
+ * — no hace falta preguntar cuál. Desde el Incremento 4 puede tener varios
+ * Services y Resources: si hay más de un Service se pregunta cuál (mismo
+ * patrón de "listado numerado + responder con el número" que ya usa
+ * offerSlots/handleSlotSelection); el Resource nunca se pregunta — se deja
+ * en null y BookingScheduler elige uno disponible entre los candidatos
+ * capaces de prestar el servicio (ya soportado desde el Hito 2, Parte XI
+ * punto 1). Ofrecer horarios, elegir servicio y confirmar son fases
+ * propias del Agent, no del Runner — presentar una lista dinámica de
+ * opciones no es lo mismo que pedir un campo declarativo, y forzarlo
+ * dentro de FlowStep habría sido la abstracción prematura que veníamos
+ * evitando.
  */
 class ReservaAgent implements AgentInterface
 {
@@ -84,10 +90,24 @@ class ReservaAgent implements AgentInterface
             return;
         }
 
+        if (($draft['_awaiting_service_selection'] ?? false) === true) {
+            $this->handleServiceSelection($message, $session, $organization, $draft);
+
+            return;
+        }
+
         // Primer mensaje del flujo (disparó Intent::Reserva) — todavía no es
         // una respuesta a nada, solo pregunta el primer campo (mismo motivo
-        // que en RegistroNegocioAgent).
+        // que en RegistroNegocioAgent). Si el negocio tiene más de un
+        // Service, primero hay que preguntar cuál — no tiene sentido pedir
+        // fecha/nombre antes de saber para qué servicio.
         if (($draft['_started'] ?? false) !== true) {
+            if (! isset($draft['serviceId']) && $organization->services()->count() > 1) {
+                $this->askServiceSelection($session, $organization, $draft);
+
+                return;
+            }
+
             $draft['_started'] = true;
             $this->drafts->put($session, $draft);
             $firstStep = $this->runner->currentStep($this->steps, $draft);
@@ -128,13 +148,78 @@ class ReservaAgent implements AgentInterface
     /**
      * @param  array<string, mixed>  $draft
      */
+    private function askServiceSelection(ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $services = $organization->services()->orderBy('id')->get();
+        $draft['_awaiting_service_selection'] = true;
+        $draft['_serviceOptions'] = $services->pluck('id')->all();
+        $this->drafts->put($session, $draft);
+        $this->reply($organization, $session->customer_phone->value(), $this->formatServiceOptions($services));
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleServiceSelection(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $options = $draft['_serviceOptions'];
+
+        if (! preg_match('/\d+/', $message->text, $matches) || ! isset($options[((int) $matches[0]) - 1])) {
+            $this->reply($organization, $message->fromPhone, 'No entendí la opción. Respondé con el número del servicio que preferís.');
+
+            return;
+        }
+
+        $draft['serviceId'] = $options[((int) $matches[0]) - 1];
+        unset($draft['_awaiting_service_selection'], $draft['_serviceOptions']);
+        $draft['_started'] = true;
+        $this->drafts->put($session, $draft);
+
+        $nextStep = $this->runner->currentStep($this->steps, $draft);
+
+        if ($nextStep === null) {
+            $this->offerSlots($session, $organization, $draft);
+
+            return;
+        }
+
+        $this->reply($organization, $message->fromPhone, ($nextStep->prompt)($draft));
+    }
+
+    /**
+     * @param  Collection<int, Service>  $services
+     */
+    private function formatServiceOptions(Collection $services): string
+    {
+        $options = $services->values()->map(
+            fn (Service $service, int $i) => ($i + 1).') '.$service->name
+        )->implode("\n");
+
+        return "¿Qué servicio querés?\n\n{$options}\n\nRespondé con el número.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function resolveService(Organization $organization, array $draft): Service
+    {
+        return isset($draft['serviceId'])
+            ? $organization->services()->findOrFail($draft['serviceId'])
+            : $organization->services()->firstOrFail();
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
     private function offerSlots(ConversationSession $session, Organization $organization, array $draft): void
     {
         $location = $organization->locations()->first();
-        $service = $organization->services()->first();
-        $resource = $organization->resources()->first();
+        $service = $this->resolveService($organization, $draft);
 
-        $slots = $this->availability->availableSlots($service, $location, $draft['date'], $resource);
+        // $resource en null: BookingScheduler ya sabe elegir entre todos los
+        // recursos candidatos capaces de prestar el servicio (Hito 2, Parte
+        // XI punto 1) — nunca hace falta preguntarle al cliente cuál.
+        $slots = $this->availability->availableSlots($service, $location, $draft['date'], null);
 
         if ($slots->isEmpty()) {
             unset($draft['date']);
@@ -191,11 +276,11 @@ class ReservaAgent implements AgentInterface
             $result = $this->createBooking->handle(new CreateBookingData(
                 organization: $organization,
                 location: $organization->locations()->first(),
-                service: $organization->services()->first(),
+                service: $this->resolveService($organization, $draft),
                 customerPhone: $message->fromPhone,
                 customerName: $draft['customerName'] ?? null,
                 startsAt: CarbonImmutable::parse($draft['chosenSlot']),
-                resource: $organization->resources()->first(),
+                resource: null,
             ));
         } catch (SlotNoLongerAvailableException) {
             // Alguien más ganó la carrera por ese horario entre que se

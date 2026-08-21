@@ -10,6 +10,8 @@ use App\Application\Conversations\Agents\AdminCommandAgent;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
+use App\Application\Tenancy\ResourceRegistrationData;
+use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
@@ -54,13 +56,11 @@ function adminAgentFixtureOrganization(string $phoneNumberId = 'wamid-admin-agen
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        serviceName: 'Corte de cabello',
-        serviceDurationMinutes: 30,
-        resourceName: 'Carlos',
-        weeklySchedule: array_map(
+        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
             range(0, 6)
-        ),
+        ))],
     ));
 
     return Organization::findOrFail($result->organizationId);

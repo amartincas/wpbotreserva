@@ -14,6 +14,8 @@ use App\Application\Conversations\Flows\FlowStep;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
+use App\Application\Tenancy\ResourceRegistrationData;
+use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
@@ -23,12 +25,19 @@ use App\Domain\Conversational\InboundMessage;
  * Único Agent capaz de operar sin Organization resuelta (implementa
  * OrganizationlessAgentInterface, no AgentInterface) — es exactamente el
  * que la crea. FlowStep[] construido una única vez en el constructor
- * (Hito 5, regla validada antes de implementar) — nunca varía según el
- * draft, la sesión, ni ningún dato de negocio en runtime.
+ * (Hito 5) — cubre solo los 3 campos de valor único (nombre/ciudad/
+ * dirección); servicios y recursos (Incremento 4) son de cantidad
+ * variable, así que se recolectan con un mini estado propio en el draft
+ * en vez de forzarlos dentro de FlowStep/ConversationalFlowRunner, que
+ * fueron validados deliberadamente para "N campos fijos", no bucles.
  *
  * ownerPhone y channel nunca se preguntan como FlowStep: ya se conocen del
  * propio mensaje/sesión — preguntarlos sería redundante y rompería "un dato
  * a la vez, solo lo que hace falta".
+ *
+ * Todo recurso queda habilitado para todo servicio (ver nota en
+ * RegisterOrganizationData) — no se pregunta la asignación fina por
+ * conversación todavía.
  *
  * Responde vía ChannelClientInterface directo (no NotificationSenderInterface,
  * que resuelve el Channel A TRAVÉS de una Organization que acá todavía no
@@ -37,10 +46,20 @@ use App\Domain\Conversational\InboundMessage;
  */
 class RegistroNegocioAgent implements OrganizationlessAgentInterface
 {
-    private const CONFIRMATION_WORDS = ['si', 'sí', 'confirmo', 'dale', 'ok', 'okay'];
+    private const YES_WORDS = ['si', 'sí', 'confirmo', 'dale', 'ok', 'okay'];
+
+    private const NO_WORDS = ['no', 'nel', 'nop', 'no gracias', 'ninguno', 'ninguna'];
 
     /** @var FlowStep[] */
     private readonly array $steps;
+
+    private readonly AiFieldExtractor $serviceNameExtractor;
+
+    private readonly AiFieldExtractor $serviceDurationExtractor;
+
+    private readonly AiFieldExtractor $resourceNameExtractor;
+
+    private readonly WeeklyScheduleFieldExtractor $weeklyScheduleExtractor;
 
     public function __construct(
         private readonly ConversationalFlowRunner $runner,
@@ -66,27 +85,12 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
                 fn () => '¿Cuál es la dirección?',
                 new AiFieldExtractor($ai, 'dirección', 'La dirección física del negocio.'),
             ),
-            new FlowStep(
-                'serviceName',
-                fn () => '¿Qué servicio ofrecés? (por ahora, contame uno solo)',
-                new AiFieldExtractor($ai, 'nombre del servicio', 'El servicio principal que ofrece el negocio.'),
-            ),
-            new FlowStep(
-                'serviceDurationMinutes',
-                fn () => '¿Cuánto dura ese servicio, en minutos?',
-                new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.'),
-            ),
-            new FlowStep(
-                'resourceName',
-                fn () => '¿Cómo se llama quién va a atender? (por ahora, una sola persona o recurso)',
-                new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que presta el servicio.'),
-            ),
-            new FlowStep(
-                'weeklySchedule',
-                fn () => '¿Qué días y en qué horario atendés? (ej: "Lunes a Viernes de 9 a 17")',
-                new WeeklyScheduleFieldExtractor($ai),
-            ),
         ];
+
+        $this->serviceNameExtractor = new AiFieldExtractor($ai, 'nombre del servicio', 'Un servicio que ofrece el negocio.');
+        $this->serviceDurationExtractor = new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.');
+        $this->resourceNameExtractor = new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.');
+        $this->weeklyScheduleExtractor = new WeeklyScheduleFieldExtractor($ai);
     }
 
     public function handle(InboundMessage $message, ConversationSession $session): void
@@ -95,6 +99,30 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
         if (($draft['_awaiting_confirmation'] ?? false) === true) {
             $this->handleConfirmationReply($message, $session, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingAddAnotherResource'] ?? false) === true) {
+            $this->handleAddAnotherResource($message, $session, $draft);
+
+            return;
+        }
+
+        if (($draft['_collectingResources'] ?? false) === true) {
+            $this->handleResourceStep($message, $session, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingAddAnotherService'] ?? false) === true) {
+            $this->handleAddAnotherService($message, $session, $draft);
+
+            return;
+        }
+
+        if (($draft['_collectingServices'] ?? false) === true) {
+            $this->handleServiceStep($message, $session, $draft);
 
             return;
         }
@@ -114,11 +142,11 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
         $currentStep = $this->runner->currentStep($this->steps, $draft);
 
-        // No debería ocurrir (si todos los steps ya están respondidos, ya se
-        // habría pasado a confirmación) — devuelve al camino de confirmación
-        // en vez de romper.
+        // No debería ocurrir (si los 3 campos fijos ya están respondidos, ya
+        // se habría pasado a la fase de servicios) — devuelve a esa fase en
+        // vez de romper.
         if ($currentStep === null) {
-            $this->beginConfirmation($session, $draft);
+            $this->beginServicesPhase($session, $draft);
 
             return;
         }
@@ -129,7 +157,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         match ($progress->status) {
             FlowProgressStatus::Invalid => $this->reply($session, $progress->reason),
             FlowProgressStatus::NextStep => $this->askNextStep($session, $progress),
-            FlowProgressStatus::Completed => $this->beginConfirmation($session, $progress->draft),
+            FlowProgressStatus::Completed => $this->beginServicesPhase($session, $progress->draft),
         };
     }
 
@@ -137,6 +165,150 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
     {
         $this->drafts->put($session, $progress->draft);
         $this->reply($session, ($progress->step->prompt)($progress->draft));
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function beginServicesPhase(ConversationSession $session, array $draft): void
+    {
+        $draft['_collectingServices'] = true;
+        $draft['services'] = [];
+        $this->drafts->put($session, $draft);
+        $this->reply($session, '¿Qué servicio ofrecés? (contame uno a la vez)');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleServiceStep(InboundMessage $message, ConversationSession $session, array $draft): void
+    {
+        if (! isset($draft['_currentServiceName'])) {
+            $result = $this->serviceNameExtractor->extract($message->text, $draft);
+
+            if (! $result->successful) {
+                $this->reply($session, $result->reason);
+
+                return;
+            }
+
+            $draft['_currentServiceName'] = $result->value;
+            $this->drafts->put($session, $draft);
+            $this->reply($session, "¿Cuánto dura {$result->value}, en minutos?");
+
+            return;
+        }
+
+        $result = $this->serviceDurationExtractor->extract($message->text, $draft);
+
+        if (! $result->successful) {
+            $this->reply($session, $result->reason);
+
+            return;
+        }
+
+        $draft['services'][] = ['name' => $draft['_currentServiceName'], 'durationMinutes' => (int) $result->value];
+        unset($draft['_currentServiceName']);
+        $draft['_awaitingAddAnotherService'] = true;
+        $this->drafts->put($session, $draft);
+        $this->reply($session, '¿Agregás otro servicio? (sí/no)');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleAddAnotherService(InboundMessage $message, ConversationSession $session, array $draft): void
+    {
+        $answer = mb_strtolower(trim($message->text));
+
+        if (in_array($answer, self::YES_WORDS, true)) {
+            unset($draft['_awaitingAddAnotherService']);
+            $this->drafts->put($session, $draft);
+            $this->reply($session, '¿Cuál es el nombre del servicio?');
+
+            return;
+        }
+
+        if (in_array($answer, self::NO_WORDS, true)) {
+            unset($draft['_awaitingAddAnotherService'], $draft['_collectingServices']);
+            $this->beginResourcesPhase($session, $draft);
+
+            return;
+        }
+
+        $this->reply($session, 'Decime "sí" o "no": ¿agregás otro servicio?');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function beginResourcesPhase(ConversationSession $session, array $draft): void
+    {
+        $draft['_collectingResources'] = true;
+        $draft['resources'] = [];
+        $this->drafts->put($session, $draft);
+        $this->reply($session, '¿Cómo se llama la primera persona o recurso que va a atender?');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleResourceStep(InboundMessage $message, ConversationSession $session, array $draft): void
+    {
+        if (! isset($draft['_currentResourceName'])) {
+            $result = $this->resourceNameExtractor->extract($message->text, $draft);
+
+            if (! $result->successful) {
+                $this->reply($session, $result->reason);
+
+                return;
+            }
+
+            $draft['_currentResourceName'] = $result->value;
+            $this->drafts->put($session, $draft);
+            $this->reply($session, "¿Qué días y en qué horario atiende {$result->value}? (ej: \"Lunes a Viernes de 9 a 17\")");
+
+            return;
+        }
+
+        $result = $this->weeklyScheduleExtractor->extract($message->text, $draft);
+
+        if (! $result->successful) {
+            $this->reply($session, $result->reason);
+
+            return;
+        }
+
+        $draft['resources'][] = ['name' => $draft['_currentResourceName'], 'weeklySchedule' => $result->value];
+        unset($draft['_currentResourceName']);
+        $draft['_awaitingAddAnotherResource'] = true;
+        $this->drafts->put($session, $draft);
+        $this->reply($session, '¿Agregás otro recurso? (sí/no)');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleAddAnotherResource(InboundMessage $message, ConversationSession $session, array $draft): void
+    {
+        $answer = mb_strtolower(trim($message->text));
+
+        if (in_array($answer, self::YES_WORDS, true)) {
+            unset($draft['_awaitingAddAnotherResource']);
+            $this->drafts->put($session, $draft);
+            $this->reply($session, '¿Cómo se llama la persona o recurso?');
+
+            return;
+        }
+
+        if (in_array($answer, self::NO_WORDS, true)) {
+            unset($draft['_awaitingAddAnotherResource'], $draft['_collectingResources']);
+            $this->beginConfirmation($session, $draft);
+
+            return;
+        }
+
+        $this->reply($session, 'Decime "sí" o "no": ¿agregás otro recurso?');
     }
 
     /**
@@ -156,11 +328,20 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
     {
         $answer = mb_strtolower(trim($message->text));
 
-        if (! in_array($answer, self::CONFIRMATION_WORDS, true)) {
+        if (! in_array($answer, self::YES_WORDS, true)) {
             $this->reply($session, 'Decime "sí" para confirmar y crear tu negocio con estos datos.');
 
             return;
         }
+
+        $services = array_map(
+            fn (array $s) => new ServiceRegistrationData($s['name'], $s['durationMinutes']),
+            $draft['services'],
+        );
+        $resources = array_map(
+            fn (array $r) => new ResourceRegistrationData($r['name'], $r['weeklySchedule']),
+            $draft['resources'],
+        );
 
         $result = $this->registerOrganization->handle(new RegisterOrganizationData(
             organizationName: $draft['organizationName'],
@@ -168,10 +349,8 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             channel: $session->channel,
             city: $draft['city'] ?? null,
             address: $draft['address'] ?? null,
-            serviceName: $draft['serviceName'],
-            serviceDurationMinutes: (int) $draft['serviceDurationMinutes'],
-            resourceName: $draft['resourceName'],
-            weeklySchedule: $draft['weeklySchedule'],
+            services: $services,
+            resources: $resources,
         ));
 
         $this->drafts->forget($session);
@@ -185,11 +364,23 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
      */
     private function buildSummary(array $draft): string
     {
-        /** @var WeeklyScheduleSlot[] $schedule */
-        $schedule = $draft['weeklySchedule'];
-        $scheduleText = implode(', ', array_map(
-            fn (WeeklyScheduleSlot $slot) => "día {$slot->weekday} de {$slot->startTime} a {$slot->endTime}",
-            $schedule
+        $servicesText = implode("\n", array_map(
+            fn (array $s) => "- {$s['name']} ({$s['durationMinutes']} min)",
+            $draft['services'],
+        ));
+
+        $resourcesText = implode("\n", array_map(
+            function (array $r) {
+                /** @var WeeklyScheduleSlot[] $schedule */
+                $schedule = $r['weeklySchedule'];
+                $scheduleText = implode(', ', array_map(
+                    fn (WeeklyScheduleSlot $slot) => "día {$slot->weekday} de {$slot->startTime} a {$slot->endTime}",
+                    $schedule
+                ));
+
+                return "- {$r['name']}: {$scheduleText}";
+            },
+            $draft['resources'],
         ));
 
         return <<<TEXT
@@ -198,9 +389,12 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             Negocio: {$draft['organizationName']}
             Ciudad: {$draft['city']}
             Dirección: {$draft['address']}
-            Servicio: {$draft['serviceName']} ({$draft['serviceDurationMinutes']} min)
-            Atiende: {$draft['resourceName']}
-            Horario: {$scheduleText}
+
+            Servicios:
+            {$servicesText}
+
+            Atienden:
+            {$resourcesText}
 
             ¿Confirmás? (sí/no)
             TEXT;

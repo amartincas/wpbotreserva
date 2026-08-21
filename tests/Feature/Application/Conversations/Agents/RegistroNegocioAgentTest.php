@@ -7,7 +7,6 @@ use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
 use App\Application\Tenancy\RegisterOrganizationCommand;
-use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
@@ -104,18 +103,23 @@ function registroFixtureMessage(string $text): InboundMessage
     return new InboundMessage('wamid.msg-'.uniqid(), 'wamid-registro', '+573001234567', $text, now()->toImmutable());
 }
 
-test('el primer mensaje del flujo pregunta el nombre del negocio, sin llamar a la IA', function () {
-    $session = registroFixtureSession();
-    $drafts = registroFakeDraftRepository();
-    $sent = [];
-    $agent = new RegistroNegocioAgent(
+function buildRegistroAgent(ConversationDraftRepositoryInterface $drafts, array &$sent, AiServiceInterface $ai): RegistroNegocioAgent
+{
+    return new RegistroNegocioAgent(
         new ConversationalFlowRunner,
         $drafts,
         new EloquentConversationSessionRepository,
         registroFakeChannelClient($sent),
         new RegisterOrganizationCommand(new UnlimitedEntitlementChecker),
-        registroNeverCalledAi(),
+        $ai,
     );
+}
+
+test('el primer mensaje del flujo pregunta el nombre del negocio, sin llamar a la IA', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
 
     $agent->handle(registroFixtureMessage('hola quiero registrar mi negocio'), $session);
 
@@ -124,7 +128,7 @@ test('el primer mensaje del flujo pregunta el nombre del negocio, sin llamar a l
     expect($drafts->get($session)['_started'])->toBeTrue();
 });
 
-test('si todos los steps ya están respondidos pero todavía no se pidió confirmación, pasa a confirmación en vez de romper', function () {
+test('si los 3 campos fijos ya están respondidos pero todavía no arrancó la fase de servicios, pasa a esa fase en vez de romper', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $drafts->put($session, [
@@ -132,73 +136,16 @@ test('si todos los steps ya están respondidos pero todavía no se pidió confir
         'organizationName' => 'Restaurante El Sabor',
         'city' => 'Bogotá',
         'address' => 'Calle 15 #20-10',
-        'serviceName' => 'Corte de cabello',
-        'serviceDurationMinutes' => '30',
-        'resourceName' => 'Carlos',
-        'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')],
     ]);
     $sent = [];
-    $agent = new RegistroNegocioAgent(
-        new ConversationalFlowRunner,
-        $drafts,
-        new EloquentConversationSessionRepository,
-        registroFakeChannelClient($sent),
-        new RegisterOrganizationCommand(new UnlimitedEntitlementChecker),
-        registroNeverCalledAi(),
-    );
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
 
     $agent->handle(registroFixtureMessage('cualquier cosa'), $session);
 
     expect($sent)->toHaveCount(1);
-    expect($sent[0]['message'])->toContain('Restaurante El Sabor');
-    expect($drafts->get($session)['_awaiting_confirmation'])->toBeTrue();
-});
-
-test('progresa un campo a la vez hasta llegar al resumen de confirmación', function () {
-    $session = registroFixtureSession();
-    $drafts = registroFakeDraftRepository();
-    $sent = [];
-    $ai = registroQueuedAi([
-        'Restaurante El Sabor',
-        'Bogotá',
-        'Calle 15 #20-10',
-        'Corte de cabello',
-        '30',
-        'Carlos',
-        json_encode([
-            ['weekday' => 1, 'start_time' => '09:00', 'end_time' => '17:00'],
-            ['weekday' => 2, 'start_time' => '09:00', 'end_time' => '17:00'],
-            ['weekday' => 3, 'start_time' => '09:00', 'end_time' => '17:00'],
-            ['weekday' => 4, 'start_time' => '09:00', 'end_time' => '17:00'],
-            ['weekday' => 5, 'start_time' => '09:00', 'end_time' => '17:00'],
-        ]),
-    ]);
-    $agent = new RegistroNegocioAgent(
-        new ConversationalFlowRunner,
-        $drafts,
-        new EloquentConversationSessionRepository,
-        registroFakeChannelClient($sent),
-        new RegisterOrganizationCommand(new UnlimitedEntitlementChecker),
-        $ai,
-    );
-
-    $agent->handle(registroFixtureMessage('hola'), $session); // dispara el flujo
-    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
-    $agent->handle(registroFixtureMessage('Bogotá'), $session);
-    $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session);
-    $agent->handle(registroFixtureMessage('Corte de cabello'), $session);
-    $agent->handle(registroFixtureMessage('30 minutos'), $session);
-    $agent->handle(registroFixtureMessage('Carlos'), $session);
-    $agent->handle(registroFixtureMessage('Lunes a Viernes de 9 a 17'), $session);
-
-    expect($sent)->toHaveCount(8);
-    $summary = $sent[7]['message'];
-    expect($summary)->toContain('Restaurante El Sabor');
-    expect($summary)->toContain('Bogotá');
-    expect($summary)->toContain('Carlos');
-    expect($drafts->get($session)['_awaiting_confirmation'])->toBeTrue();
-
-    expect(Organization::count())->toBe(0); // todavía no se confirmó
+    expect($sent[0]['message'])->toContain('servicio');
+    expect($drafts->get($session)['_collectingServices'])->toBeTrue();
+    expect($drafts->get($session)['services'])->toBe([]);
 });
 
 test('re-pregunta con el motivo cuando el extractor no puede interpretar la respuesta, sin avanzar el draft', function () {
@@ -206,14 +153,7 @@ test('re-pregunta con el motivo cuando el extractor no puede interpretar la resp
     $drafts = registroFakeDraftRepository();
     $sent = [];
     $ai = registroQueuedAi(['NO_ENCONTRADO']);
-    $agent = new RegistroNegocioAgent(
-        new ConversationalFlowRunner,
-        $drafts,
-        new EloquentConversationSessionRepository,
-        registroFakeChannelClient($sent),
-        new RegisterOrganizationCommand(new UnlimitedEntitlementChecker),
-        $ai,
-    );
+    $agent = buildRegistroAgent($drafts, $sent, $ai);
 
     $agent->handle(registroFixtureMessage('hola'), $session);
     $agent->handle(registroFixtureMessage('asdkjhasd'), $session);
@@ -223,7 +163,100 @@ test('re-pregunta con el motivo cuando el extractor no puede interpretar la resp
     expect($drafts->get($session))->not->toHaveKey('organizationName');
 });
 
-test('al confirmar con sí, registra la organización, limpia el draft y el Intent, y confirma al cliente', function () {
+test('Incremento 4: recolecta varios servicios y varios recursos uno a la vez (bucle con "¿agregás otro?") hasta llegar al resumen de confirmación', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $ai = registroQueuedAi([
+        'Restaurante El Sabor',
+        'Bogotá',
+        'Calle 15 #20-10',
+        'Corte de cabello',
+        '30',
+        'Barba',
+        '20',
+        'Carlos',
+        json_encode([
+            ['weekday' => 1, 'start_time' => '09:00', 'end_time' => '17:00'],
+        ]),
+        'Ana',
+        json_encode([
+            ['weekday' => 2, 'start_time' => '10:00', 'end_time' => '18:00'],
+            ['weekday' => 3, 'start_time' => '10:00', 'end_time' => '18:00'],
+        ]),
+    ]);
+    $agent = buildRegistroAgent($drafts, $sent, $ai);
+
+    $agent->handle(registroFixtureMessage('hola'), $session); // dispara el flujo
+    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
+    $agent->handle(registroFixtureMessage('Bogotá'), $session);
+    $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session); // completa los 3 fijos -> arranca servicios
+    $agent->handle(registroFixtureMessage('Corte de cabello'), $session);
+    $agent->handle(registroFixtureMessage('30 minutos'), $session);
+    $agent->handle(registroFixtureMessage('sí'), $session); // agrega otro servicio
+    $agent->handle(registroFixtureMessage('Barba'), $session);
+    $agent->handle(registroFixtureMessage('20 minutos'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> arranca recursos
+    $agent->handle(registroFixtureMessage('Carlos'), $session);
+    $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
+    $agent->handle(registroFixtureMessage('sí'), $session); // agrega otro recurso
+    $agent->handle(registroFixtureMessage('Ana'), $session);
+    $agent->handle(registroFixtureMessage('Martes y miércoles de 10 a 18'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // termina recursos -> confirmación
+
+    expect($sent)->toHaveCount(16);
+    $summary = $sent[15]['message'];
+    expect($summary)->toContain('Restaurante El Sabor');
+    expect($summary)->toContain('Corte de cabello');
+    expect($summary)->toContain('Barba');
+    expect($summary)->toContain('Carlos');
+    expect($summary)->toContain('Ana');
+    expect($drafts->get($session)['_awaiting_confirmation'])->toBeTrue();
+    expect($drafts->get($session)['services'])->toHaveCount(2);
+    expect($drafts->get($session)['resources'])->toHaveCount(2);
+
+    expect(Organization::count())->toBe(0); // todavía no se confirmó
+
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    $org = Organization::firstOrFail();
+    expect($org->name)->toBe('Restaurante El Sabor');
+    expect($org->services)->toHaveCount(2);
+    expect($org->resources)->toHaveCount(2);
+    $carlos = $org->resources->firstWhere('display_name', 'Carlos');
+    $ana = $org->resources->firstWhere('display_name', 'Ana');
+    expect($carlos->schedules)->toHaveCount(1);
+    expect($ana->schedules)->toHaveCount(2);
+    // Cruce completo: cada servicio queda habilitado para los 2 recursos.
+    foreach ($org->services as $service) {
+        expect($service->resources)->toHaveCount(2);
+    }
+});
+
+test('una respuesta que no es ni sí ni no en "¿agregás otro servicio?" vuelve a preguntar, sin avanzar de fase', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $drafts->put($session, [
+        '_started' => true,
+        'organizationName' => 'Restaurante El Sabor',
+        'city' => 'Bogotá',
+        'address' => 'Calle 15 #20-10',
+        '_collectingServices' => true,
+        'services' => [['name' => 'Corte de cabello', 'durationMinutes' => 30]],
+        '_awaitingAddAnotherService' => true,
+    ]);
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
+
+    $agent->handle(registroFixtureMessage('no sé'), $session);
+
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('sí');
+    expect($drafts->get($session)['_awaitingAddAnotherService'])->toBeTrue();
+    expect($drafts->get($session)['services'])->toHaveCount(1);
+});
+
+test('al confirmar con sí, registra la organización con sus servicios/recursos, limpia el draft y el Intent, y confirma al cliente', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sessions = new EloquentConversationSessionRepository;
@@ -235,24 +268,17 @@ test('al confirmar con sí, registra la organización, limpia el draft y el Inte
         'organizationName' => 'Restaurante El Sabor',
         'city' => 'Bogotá',
         'address' => 'Calle 15 #20-10',
-        'serviceName' => 'Corte de cabello',
-        'serviceDurationMinutes' => '30',
-        'resourceName' => 'Carlos',
-        'weeklySchedule' => [
-            new WeeklyScheduleSlot(1, '09:00', '17:00'),
+        'services' => [
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30],
+        ],
+        'resources' => [
+            ['name' => 'Carlos', 'weeklySchedule' => [new App\Application\Tenancy\WeeklyScheduleSlot(1, '09:00', '17:00')]],
         ],
     ];
     $drafts->put($session, $completeDraft);
 
     $sent = [];
-    $agent = new RegistroNegocioAgent(
-        new ConversationalFlowRunner,
-        $drafts,
-        $sessions,
-        registroFakeChannelClient($sent),
-        new RegisterOrganizationCommand(new UnlimitedEntitlementChecker),
-        registroNeverCalledAi(),
-    );
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
 
     $agent->handle(registroFixtureMessage('sí'), $session);
 
@@ -261,6 +287,8 @@ test('al confirmar con sí, registra la organización, limpia el draft y el Inte
     expect($org->name)->toBe('Restaurante El Sabor');
     expect($org->owner_phone)->toBe('+573001234567');
     expect($org->channels->first()->id)->toBe($session->channel_id);
+    expect($org->services)->toHaveCount(1);
+    expect($org->resources)->toHaveCount(1);
 
     expect($drafts->get($session))->toBe([]);
     expect($session->fresh()->current_intent)->toBeNull();
@@ -279,21 +307,16 @@ test('si la respuesta de confirmación no es un sí, vuelve a pedir confirmació
         'organizationName' => 'Restaurante El Sabor',
         'city' => 'Bogotá',
         'address' => 'Calle 15 #20-10',
-        'serviceName' => 'Corte de cabello',
-        'serviceDurationMinutes' => '30',
-        'resourceName' => 'Carlos',
-        'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')],
+        'services' => [
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30],
+        ],
+        'resources' => [
+            ['name' => 'Carlos', 'weeklySchedule' => [new App\Application\Tenancy\WeeklyScheduleSlot(1, '09:00', '17:00')]],
+        ],
     ]);
 
     $sent = [];
-    $agent = new RegistroNegocioAgent(
-        new ConversationalFlowRunner,
-        $drafts,
-        new EloquentConversationSessionRepository,
-        registroFakeChannelClient($sent),
-        new RegisterOrganizationCommand(new UnlimitedEntitlementChecker),
-        registroNeverCalledAi(),
-    );
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
 
     $agent->handle(registroFixtureMessage('tal vez'), $session);
 

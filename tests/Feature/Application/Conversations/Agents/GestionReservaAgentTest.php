@@ -11,6 +11,8 @@ use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
+use App\Application\Tenancy\ResourceRegistrationData;
+use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Booking\Booking;
@@ -113,13 +115,11 @@ function gestionFixtureOrganization(string $phoneNumberId = 'wamid-gestion'): Or
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        serviceName: 'Corte de cabello',
-        serviceDurationMinutes: 30,
-        resourceName: 'Carlos',
-        weeklySchedule: array_map(
+        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
             range(0, 6)
-        ),
+        ))],
     ));
 
     return Organization::findOrFail($result->organizationId);

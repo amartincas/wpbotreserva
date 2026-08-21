@@ -8,6 +8,7 @@ use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Conversational\Intent;
+use App\Domain\Scheduling\Service;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
@@ -179,6 +180,28 @@ test('responder "gestionar" deja el Intent en GestionReserva y limpia el draft, 
 
     expect($drafts->get($session))->toBe([]);
     expect($session->fresh()->current_intent)->toBe(Intent::GestionReserva->value);
+});
+
+test('Incremento 4: responder "nueva" cuando el negocio tiene más de un servicio entrega la selección de servicio, no salta directo a fecha (pero la fecha ya dicha queda precargada)', function () {
+    $organization = bookingChoiceFixtureOrganization();
+    Service::create(['organization_id' => $organization->id, 'name' => 'Corte de cabello', 'duration_minutes' => 30]);
+    Service::create(['organization_id' => $organization->id, 'name' => 'Barba', 'duration_minutes' => 20]);
+    $session = bookingChoiceFixtureSession($organization);
+    $drafts = bookingChoiceFakeDraftRepository();
+    $sent = [];
+    $targetDate = now()->addDays(4)->toDateString();
+    $agent = buildBookingChoiceAgent($drafts, $sent, bookingChoiceQueuedAi([$targetDate]));
+
+    $agent->handle(bookingChoiceFixtureMessage('quiero una cita para el 24 de agosto'), $session, $organization);
+    $agent->handle(bookingChoiceFixtureMessage('nueva'), $session, $organization);
+
+    expect($sent[1]['message'])->toContain('servicio');
+    expect($sent[1]['message'])->toContain('Corte de cabello');
+    expect($sent[1]['message'])->toContain('Barba');
+    expect($drafts->get($session)['_awaiting_service_selection'])->toBeTrue();
+    expect($drafts->get($session)['date']->toDateString())->toBe($targetDate);
+    expect($drafts->get($session))->not->toHaveKey('_started');
+    expect($session->fresh()->current_intent)->toBe(Intent::Reserva->value);
 });
 
 test('una respuesta que no es ni nueva ni gestionar vuelve a preguntar, sin decidir nada ni llamar a la IA', function () {
