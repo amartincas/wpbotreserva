@@ -108,12 +108,17 @@ test('un día suelto sin mes es ambiguo y pide aclaración, sin llamar a la IA',
 });
 
 test('con el mes explícito (en palabra o como dd/mm), no es ambiguo y sí llama a la IA', function () {
-    $extractor = new DateFieldExtractor(dateExtractorFakeService('2026-08-24'));
+    // Fecha relativa a hoy, no hardcodeada — un "2026-08-24" fijo queda en
+    // el pasado apenas el reloj real cruza esa fecha, y el extractor
+    // rechaza cualquier fecha pasada (fragilidad real ya vista antes con
+    // fixtures de fecha en este proyecto).
+    $futureDate = now()->addDays(30)->toDateString();
+    $extractor = new DateFieldExtractor(dateExtractorFakeService($futureDate));
 
     $result = $extractor->extract('24 de agosto', []);
 
     expect($result->successful)->toBeTrue();
-    expect($result->value->toDateString())->toBe('2026-08-24');
+    expect($result->value->toDateString())->toBe($futureDate);
 });
 
 test('referencias sin número (mañana, hoy, un día de la semana) nunca se marcan como ambiguas', function () {
