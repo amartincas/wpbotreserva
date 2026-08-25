@@ -46,6 +46,11 @@ function fakeChannelClient(array &$calls): ChannelClientInterface
         {
             $this->sharedRef[] = compact('channel', 'to', 'templateName', 'language', 'bodyParameters');
         }
+
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void
+        {
+            $this->sharedRef[] = compact('channel', 'to', 'bodyText', 'buttons');
+        }
     };
 }
 
@@ -95,6 +100,41 @@ test('sendTemplate con la implementación real llega a la Graph API de Meta', fu
 
     Http::assertSent(fn ($request) => $request->url() === 'https://graph.facebook.com/v21.0/wamid-123/messages'
         && $request['type'] === 'template');
+});
+
+test('sendButtons depende de ChannelClientInterface: un cliente falso recibe el channel resuelto y los botones', function () {
+    $calls = [];
+    [$org, $channel] = organizationWithChannel();
+
+    (new WhatsAppNotificationSender(fakeChannelClient($calls)))
+        ->sendButtons($org, '+573001234567', '¿Confirmás el turno?', [
+            ['id' => 'si', 'title' => 'Sí'],
+            ['id' => 'no', 'title' => 'No'],
+        ]);
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['channel']->is($channel))->toBeTrue();
+    expect($calls[0]['bodyText'])->toBe('¿Confirmás el turno?');
+    expect($calls[0]['buttons'])->toBe([
+        ['id' => 'si', 'title' => 'Sí'],
+        ['id' => 'no', 'title' => 'No'],
+    ]);
+});
+
+test('sendButtons con la implementación real llega a la Graph API de Meta como mensaje interactivo', function () {
+    Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.abc']]], 200)]);
+    [$org] = organizationWithChannel();
+
+    (new WhatsAppNotificationSender(new MetaWhatsAppClient))
+        ->sendButtons($org, '+573001234567', '¿Confirmás el turno?', [
+            ['id' => 'si', 'title' => 'Sí'],
+            ['id' => 'no', 'title' => 'No'],
+        ]);
+
+    Http::assertSent(fn ($request) => $request->url() === 'https://graph.facebook.com/v21.0/wamid-123/messages'
+        && $request['type'] === 'interactive'
+        && $request['interactive']['type'] === 'button'
+        && $request['interactive']['action']['buttons'][0]['reply']['id'] === 'si');
 });
 
 test('lanza NotificationDeliveryException si la organización no tiene channel de WhatsApp', function () {

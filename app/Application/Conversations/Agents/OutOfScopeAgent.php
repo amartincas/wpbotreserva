@@ -21,10 +21,21 @@ class OutOfScopeAgent implements AgentInterface
 
     public function handle(InboundMessage $message, ConversationSession $session, Organization $organization): void
     {
-        $this->notifications->send(
+        // Botones en vez de pedirle al cliente que lo escriba: caso real
+        // (Incremento 4) donde el clasificador de IA falló varias veces
+        // seguidas ante frases inequívocas como "quiero registrar mi
+        // negocio" — con un conjunto cerrado de 3 opciones, ButtonIntentStrategy
+        // reconoce la respuesta con coincidencia exacta, sin volver a pasar
+        // por la IA.
+        $this->notifications->sendButtons(
             $organization,
             $message->fromPhone,
-            'Hola, soy el asistente de WpbotReserva. Puedo ayudarte a agendar un turno o, si sos dueño de un negocio, a registrarlo. ¿En qué te ayudo?'
+            'Hola, soy el asistente de WpbotReserva. ¿En qué te ayudo?',
+            [
+                ['id' => 'menu_registro_negocio', 'title' => 'Registrar negocio'],
+                ['id' => 'menu_reserva', 'title' => 'Reservar turno'],
+                ['id' => 'menu_gestion_reserva', 'title' => 'Gestionar reserva'],
+            ],
         );
     }
 }

@@ -52,6 +52,11 @@ function registroFakeChannelClient(array &$sent): ChannelClientInterface
         }
 
         public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void
+        {
+            $this->sent[] = ['channel' => $channel, 'to' => $to, 'message' => $bodyText, 'buttons' => $buttons];
+        }
     };
 }
 
@@ -251,7 +256,7 @@ test('una respuesta que no es ni sí ni no en "¿agregás otro servicio?" vuelve
     $agent->handle(registroFixtureMessage('no sé'), $session);
 
     expect($sent)->toHaveCount(1);
-    expect($sent[0]['message'])->toContain('sí');
+    expect(array_column($sent[0]['buttons'], 'id'))->toBe(['si', 'no']);
     expect($drafts->get($session)['_awaitingAddAnotherService'])->toBeTrue();
     expect($drafts->get($session)['services'])->toHaveCount(1);
 });

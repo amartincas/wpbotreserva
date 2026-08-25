@@ -19,10 +19,14 @@ use Throwable;
  * ProcessInboundConversationMessage — nunca resuelve Channel/Organization
  * ni toca el Router directamente, eso vive dentro del Job.
  *
- * Alcance del Hito 7: solo mensajes de texto. Audio/imagen/ubicación/
- * botones se ignoran silenciosamente (se cuentan como "sin texto", ver
- * extractText()) — no hay ningún hito que los soporte todavía; es un
- * límite explícito, no un olvido.
+ * Alcance del Hito 7: solo mensajes de texto. Audio/imagen/ubicación se
+ * ignoran silenciosamente (se cuentan como "sin texto", ver extractText())
+ * — no hay ningún hito que los soporte todavía; es un límite explícito, no
+ * un olvido. Los botones/listas interactivas SÍ se soportan (agregado para
+ * las respuestas de opción cerrada — ver ChannelClientInterface::sendButtonsMessage()):
+ * el $id que se mandó al enviar el botón vuelve acá como si fuera el texto
+ * tipeado por el cliente, así que todo el pipeline de abajo (clasificador,
+ * agentes) nunca necesita saber que existió un botón.
  */
 class InboundWhatsAppWebhookController extends Controller
 {
@@ -105,6 +109,24 @@ class InboundWhatsAppWebhookController extends Controller
     {
         return match ($rawMessage['type'] ?? null) {
             'text' => $rawMessage['text']['body'] ?? null,
+            'interactive' => $this->extractInteractiveReplyId($rawMessage),
+            default => null,
+        };
+    }
+
+    /**
+     * El id de un botón o de una opción de lista viaja tal cual — nunca el
+     * title visible — porque es lo que las estrategias de clasificación y
+     * los agentes ya saben interpretar (mismos valores que se mandaron al
+     * enviar el mensaje interactivo, ej. "si"/"no"/"nueva"/"cancelar").
+     */
+    private function extractInteractiveReplyId(array $rawMessage): ?string
+    {
+        $interactive = $rawMessage['interactive'] ?? [];
+
+        return match ($interactive['type'] ?? null) {
+            'button_reply' => $interactive['button_reply']['id'] ?? null,
+            'list_reply' => $interactive['list_reply']['id'] ?? null,
             default => null,
         };
     }

@@ -44,6 +44,13 @@ class WhatsAppNotificationSender implements NotificationSenderInterface
         $this->client->sendTemplateMessage($channel, $toPhoneE164, $templateName, $language, $bodyParameters);
     }
 
+    public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void
+    {
+        $channel = $this->activeWhatsAppChannelFor($organization);
+
+        $this->client->sendButtonsMessage($channel, $toPhoneE164, $bodyText, $buttons);
+    }
+
     private function activeWhatsAppChannelFor(Organization $organization): Channel
     {
         $channel = $organization->channels()

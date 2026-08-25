@@ -24,4 +24,14 @@ interface NotificationSenderInterface
      * @throws NotificationDeliveryException si el envío falla
      */
     public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void;
+
+    /**
+     * Ver ChannelClientInterface::sendButtonsMessage() — mismo contrato,
+     * resolviendo el Channel a partir de la Organization.
+     *
+     * @param  array<array{id: string, title: string}>  $buttons
+     *
+     * @throws NotificationDeliveryException si el envío falla
+     */
+    public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void;
 }

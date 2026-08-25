@@ -47,6 +47,19 @@ class GestionReservaAgent implements AgentInterface
 
     private const ACTION_STATUS = ['estado', 'consultar', 'consultar estado', 'como va', 'cómo va'];
 
+    // Ids que ya son valores válidos de los word-lists de arriba — mismo
+    // criterio en todos los Agents con botones (ver RegistroNegocioAgent).
+    private const ACTION_BUTTONS = [
+        ['id' => 'cancelar', 'title' => 'Cancelar'],
+        ['id' => 'reprogramar', 'title' => 'Reprogramar'],
+        ['id' => 'estado', 'title' => 'Consultar estado'],
+    ];
+
+    private const YES_NO_BUTTONS = [
+        ['id' => 'si', 'title' => 'Sí'],
+        ['id' => 'no', 'title' => 'No'],
+    ];
+
     /** @var FlowStep[] */
     private readonly array $rescheduleSteps;
 
@@ -170,11 +183,11 @@ class GestionReservaAgent implements AgentInterface
         $draft['_awaiting_action'] = true;
         $this->drafts->put($session, $draft);
 
-        $this->reply($organization, $toPhone, sprintf(
-            "Tenés un turno de %s el %s.\n\n¿Querés cancelarlo, reprogramarlo, o consultar el estado? (cancelar/reprogramar/estado)",
+        $this->notifications->sendButtons($organization, $toPhone, sprintf(
+            "Tenés un turno de %s el %s.\n\n¿Qué querés hacer?",
             $booking->service->name,
             $booking->starts_at->translatedFormat('l d/m/Y H:i'),
-        ));
+        ), self::ACTION_BUTTONS);
     }
 
     /**
@@ -202,8 +215,8 @@ class GestionReservaAgent implements AgentInterface
             $draft['_awaiting_action'] = false;
             $draft['_awaiting_cancel_confirmation'] = true;
             $this->drafts->put($session, $draft);
-            $this->reply($organization, $message->fromPhone, sprintf(
-                '¿Confirmás que querés cancelar tu turno del %s? (sí/no)',
+            $this->replyYesNo($organization, $message->fromPhone, sprintf(
+                '¿Confirmás que querés cancelar tu turno del %s?',
                 $booking->starts_at->translatedFormat('l d/m/Y H:i'),
             ));
 
@@ -219,7 +232,7 @@ class GestionReservaAgent implements AgentInterface
             return;
         }
 
-        $this->reply($organization, $message->fromPhone, 'No entendí. Respondé cancelar, reprogramar o estado.');
+        $this->notifications->sendButtons($organization, $message->fromPhone, 'No entendí. ¿Qué querés hacer?', self::ACTION_BUTTONS);
     }
 
     /**
@@ -310,7 +323,7 @@ class GestionReservaAgent implements AgentInterface
         $this->drafts->put($session, $draft);
 
         $chosen = CarbonImmutable::parse($draft['newChosenSlot']);
-        $this->reply($organization, $message->fromPhone, "¿Confirmás mover tu turno para el {$chosen->format('d/m')} a las {$chosen->format('H:i')}? (sí/no)");
+        $this->replyYesNo($organization, $message->fromPhone, "¿Confirmás mover tu turno para el {$chosen->format('d/m')} a las {$chosen->format('H:i')}?");
     }
 
     /**
@@ -379,6 +392,11 @@ class GestionReservaAgent implements AgentInterface
             BookingStatus::COMPLETED => 'completado',
             BookingStatus::NO_SHOW => 'marcado como no-show',
         };
+    }
+
+    private function replyYesNo(Organization $organization, string $toPhone, string $text): void
+    {
+        $this->notifications->sendButtons($organization, $toPhone, $text, self::YES_NO_BUTTONS);
     }
 
     private function reply(Organization $organization, string $toPhone, string $text): void

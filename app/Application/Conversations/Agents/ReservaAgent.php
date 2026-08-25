@@ -256,7 +256,7 @@ class ReservaAgent implements AgentInterface
         $this->drafts->put($session, $draft);
 
         $chosen = CarbonImmutable::parse($draft['chosenSlot']);
-        $this->reply($organization, $message->fromPhone, "Confirmás el turno para el {$chosen->format('d/m')} a las {$chosen->format('H:i')}? (sí/no)");
+        $this->replyYesNo($organization, $message->fromPhone, "¿Confirmás el turno para el {$chosen->format('d/m')} a las {$chosen->format('H:i')}?");
     }
 
     /**
@@ -267,7 +267,7 @@ class ReservaAgent implements AgentInterface
         $answer = mb_strtolower(trim($message->text));
 
         if (! in_array($answer, self::CONFIRMATION_WORDS, true)) {
-            $this->reply($organization, $message->fromPhone, 'Decime "sí" para confirmar el turno.');
+            $this->replyYesNo($organization, $message->fromPhone, '¿Confirmás el turno?');
 
             return;
         }
@@ -317,5 +317,17 @@ class ReservaAgent implements AgentInterface
     private function reply(Organization $organization, string $toPhone, string $text): void
     {
         $this->notifications->send($organization, $toPhone, $text);
+    }
+
+    // Los ids "si"/"no" ya son valores válidos de CONFIRMATION_WORDS —
+    // mismo criterio en todos los Agents con botones (ver RegistroNegocioAgent).
+    private const YES_NO_BUTTONS = [
+        ['id' => 'si', 'title' => 'Sí'],
+        ['id' => 'no', 'title' => 'No'],
+    ];
+
+    private function replyYesNo(Organization $organization, string $toPhone, string $text): void
+    {
+        $this->notifications->sendButtons($organization, $toPhone, $text, self::YES_NO_BUTTONS);
     }
 }

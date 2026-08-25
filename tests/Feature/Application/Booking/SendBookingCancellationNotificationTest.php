@@ -32,6 +32,8 @@ test('handle() manda la notificación de cancelación con el teléfono y el mens
         }
 
         public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons($organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
 
     (new SendBookingCancellationNotification($fakeSender))->handle(new BookingCancelled($booking));

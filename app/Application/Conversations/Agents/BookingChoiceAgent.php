@@ -30,6 +30,13 @@ class BookingChoiceAgent implements AgentInterface
 
     private const GESTIONAR_WORDS = ['gestionar', 'gestion', 'gestión', 'existente', 'administrar', 'la que tengo', 'una que tengo'];
 
+    // Ids que ya son valores válidos de NUEVA_WORDS/GESTIONAR_WORDS —
+    // mismo criterio en todos los Agents con botones (ver RegistroNegocioAgent).
+    private const NUEVA_GESTIONAR_BUTTONS = [
+        ['id' => 'nueva', 'title' => 'Nueva reserva'],
+        ['id' => 'gestionar', 'title' => 'Gestionar reserva'],
+    ];
+
     private readonly DateFieldExtractor $dateExtractor;
 
     public function __construct(
@@ -51,7 +58,12 @@ class BookingChoiceAgent implements AgentInterface
             // fecha ahí, "nueva" abajo la reaprovecha en vez de hacerle
             // repetir lo que ya dijo.
             $this->drafts->put($session, ['_awaiting_choice' => true, '_originalText' => $message->text]);
-            $this->reply($organization, $message->fromPhone, 'Veo que ya tenés reservas activas. ¿Querés hacer una reserva nueva o gestionar una que ya tenés? (nueva/gestionar)');
+            $this->notifications->sendButtons(
+                $organization,
+                $message->fromPhone,
+                'Veo que ya tenés reservas activas. ¿Querés hacer una reserva nueva o gestionar una que ya tenés?',
+                self::NUEVA_GESTIONAR_BUTTONS,
+            );
 
             return;
         }
@@ -72,7 +84,7 @@ class BookingChoiceAgent implements AgentInterface
             return;
         }
 
-        $this->reply($organization, $message->fromPhone, 'No entendí. Respondé "nueva" o "gestionar".');
+        $this->notifications->sendButtons($organization, $message->fromPhone, 'No entendí. ¿Nueva reserva o gestionar una que ya tenés?', self::NUEVA_GESTIONAR_BUTTONS);
     }
 
     private function startReserva(ConversationSession $session, Organization $organization, string $toPhone, string $originalText): void

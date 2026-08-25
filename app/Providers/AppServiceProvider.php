@@ -23,6 +23,7 @@ use App\Application\Conversations\Agents\RegistroNegocioAgent;
 use App\Application\Conversations\Agents\ReservaAgent;
 use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\Classification\AiIntentClassifierStrategy;
+use App\Application\Conversations\Classification\ButtonIntentStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
@@ -100,12 +101,16 @@ class AppServiceProvider extends ServiceProvider
         // costo de IA, coincidencia exacta), luego la palabra de salida
         // (tiene que ir ANTES de continuidad: si corriera después, la
         // continuidad ya habría repetido el Intent activo y nunca le daría
-        // la oportunidad de interrumpirlo), luego continuidad de
+        // la oportunidad de interrumpirlo), luego el botón del menú inicial
+        // (mismo motivo: el mensaje anterior quedó clasificado FueraDeAlcance
+        // y quedó grabado en la sesión — sin ir antes de continuidad, el
+        // click del botón nunca podría reclasificar), luego continuidad de
         // conversación, IA como último recurso.
         $this->app->bind(IntentClassifierInterface::class, function () {
             return new CompositeIntentClassifier([
                 $this->app->make(DeterministicAdminCommandStrategy::class),
                 $this->app->make(ResetKeywordStrategy::class),
+                $this->app->make(ButtonIntentStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
                 $this->app->make(AiIntentClassifierStrategy::class),
             ]);

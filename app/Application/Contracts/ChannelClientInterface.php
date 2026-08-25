@@ -36,4 +36,19 @@ interface ChannelClientInterface
      * @throws NotificationDeliveryException si el envío falla, el canal no tiene credenciales válidas, o la plantilla no está aprobada
      */
     public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void;
+
+    /**
+     * Mensaje con botones de respuesta rápida (Cloud API "interactive/button")
+     * — reemplaza a sendTextMessage en los puntos donde la respuesta
+     * esperada es una opción cerrada (sí/no, elegir entre pocas acciones).
+     * Elimina la ambigüedad de interpretar texto libre: el cliente toca un
+     * botón y el webhook recibe exactamente el $id que se mandó acá, sin
+     * pasar por ningún clasificador de IA. Máximo 3 botones y 20 caracteres
+     * por título — límites reales de WhatsApp, no arbitrarios.
+     *
+     * @param  array<array{id: string, title: string}>  $buttons
+     *
+     * @throws NotificationDeliveryException si el envío falla o el canal no tiene credenciales válidas para este proveedor
+     */
+    public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void;
 }

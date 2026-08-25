@@ -96,3 +96,33 @@ test('sendTemplateMessage lanza NotificationDeliveryException cuando Meta respon
     expect(fn () => (new MetaWhatsAppClient)->sendTemplateMessage(metaChannel(), '+573001234567', 'recordatorio_reserva', 'es', ['Ana']))
         ->toThrow(NotificationDeliveryException::class, 'Meta API respondió 400');
 });
+
+test('sendButtonsMessage arma el payload interactivo de tipo "button" con id y title de cada botón', function () {
+    Http::fake(['graph.facebook.com/*' => Http::response(['messages' => [['id' => 'wamid.abc']]], 200)]);
+
+    (new MetaWhatsAppClient)->sendButtonsMessage(
+        metaChannel(phoneNumberId: 'wamid-789'),
+        '+573001234567',
+        '¿Confirmás el turno?',
+        [
+            ['id' => 'si', 'title' => 'Sí'],
+            ['id' => 'no', 'title' => 'No'],
+        ],
+    );
+
+    Http::assertSent(function ($request) {
+        return $request->url() === 'https://graph.facebook.com/v21.0/wamid-789/messages'
+            && $request['type'] === 'interactive'
+            && $request['interactive']['type'] === 'button'
+            && $request['interactive']['body']['text'] === '¿Confirmás el turno?'
+            && $request['interactive']['action']['buttons'] === [
+                ['type' => 'reply', 'reply' => ['id' => 'si', 'title' => 'Sí']],
+                ['type' => 'reply', 'reply' => ['id' => 'no', 'title' => 'No']],
+            ];
+    });
+});
+
+test('sendButtonsMessage lanza NotificationDeliveryException si faltan credenciales, igual que sendTextMessage', function () {
+    expect(fn () => (new MetaWhatsAppClient)->sendButtonsMessage(metaChannel(credentials: null), '+573001234567', '¿Confirmás?', [['id' => 'si', 'title' => 'Sí']]))
+        ->toThrow(NotificationDeliveryException::class);
+});

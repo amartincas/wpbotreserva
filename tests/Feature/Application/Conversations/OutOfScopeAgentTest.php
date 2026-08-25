@@ -22,10 +22,15 @@ function outOfScopeFakeSender(array &$calls): NotificationSenderInterface
         }
 
         public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void
+        {
+            $this->calls[] = ['organization' => $organization, 'toPhoneE164' => $toPhoneE164, 'message' => $bodyText, 'buttons' => $buttons];
+        }
     };
 }
 
-test('envía un mensaje de bienvenida/orientación a través de NotificationSenderInterface', function () {
+test('envía un menú de botones (registrar negocio/reservar/gestionar) a través de NotificationSenderInterface', function () {
     $calls = [];
     $channel = Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
@@ -43,4 +48,6 @@ test('envía un mensaje de bienvenida/orientación a través de NotificationSend
     expect($calls[0]['organization']->is($org))->toBeTrue();
     expect($calls[0]['toPhoneE164'])->toBe('+573001234567');
     expect($calls[0]['message'])->not->toBeEmpty();
+    expect($calls[0]['buttons'])->toHaveCount(3);
+    expect(array_column($calls[0]['buttons'], 'id'))->toBe(['menu_registro_negocio', 'menu_reserva', 'menu_gestion_reserva']);
 });

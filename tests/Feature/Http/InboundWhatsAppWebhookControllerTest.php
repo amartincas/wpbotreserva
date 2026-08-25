@@ -28,6 +28,29 @@ function webhookTextMessagePayload(array $overrides = []): array
     ];
 }
 
+function webhookButtonReplyPayload(string $buttonId, array $overrides = []): array
+{
+    return [
+        'entry' => [[
+            'changes' => [[
+                'value' => [
+                    'metadata' => ['phone_number_id' => $overrides['phoneNumberId'] ?? 'wamid-webhook-channel'],
+                    'messages' => [[
+                        'id' => $overrides['messageId'] ?? 'wamid.test-'.uniqid(),
+                        'from' => $overrides['from'] ?? '573001234567',
+                        'timestamp' => (string) now()->timestamp,
+                        'type' => 'interactive',
+                        'interactive' => [
+                            'type' => 'button_reply',
+                            'button_reply' => ['id' => $buttonId, 'title' => $overrides['title'] ?? 'Sí'],
+                        ],
+                    ]],
+                ],
+            ]],
+        ]],
+    ];
+}
+
 beforeEach(function () {
     config(['services.whatsapp_webhook.verify_token' => webhookVerifyToken()]);
     config(['services.whatsapp_webhook.app_secret' => null]);
@@ -109,6 +132,32 @@ test('handle ignora mensajes que no son de texto (fuera de alcance del Hito 7)',
     $this->postJson('/api/wpbotreserva/whatsapp/webhook', $payload);
 
     Bus::assertNotDispatched(ProcessInboundConversationMessage::class);
+});
+
+test('handle interpreta la respuesta de un botón como si el id fuera el texto tipeado', function () {
+    Bus::fake([ProcessInboundConversationMessage::class]);
+
+    $this->postJson('/api/wpbotreserva/whatsapp/webhook', webhookButtonReplyPayload('si', ['messageId' => 'wamid.btn1']));
+
+    Bus::assertDispatched(ProcessInboundConversationMessage::class, function ($job) {
+        return $job->message->messageId === 'wamid.btn1' && $job->message->text === 'si';
+    });
+});
+
+test('handle interpreta la respuesta de una lista igual que la de un botón (list_reply.id)', function () {
+    Bus::fake([ProcessInboundConversationMessage::class]);
+
+    $payload = webhookTextMessagePayload([
+        'messageOverrides' => [
+            'type' => 'interactive',
+            'text' => null,
+            'interactive' => ['type' => 'list_reply', 'list_reply' => ['id' => 'nueva', 'title' => 'Nueva reserva']],
+        ],
+    ]);
+
+    $this->postJson('/api/wpbotreserva/whatsapp/webhook', $payload);
+
+    Bus::assertDispatched(ProcessInboundConversationMessage::class, fn ($job) => $job->message->text === 'nueva');
 });
 
 test('handle no despacha nada si falta phone_number_id en metadata', function () {

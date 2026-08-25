@@ -81,6 +81,11 @@ function bookingChoiceFakeNotificationSender(array &$sent): NotificationSenderIn
         }
 
         public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void
+        {
+            $this->sent[] = ['organization' => $organization, 'toPhoneE164' => $toPhoneE164, 'message' => $bodyText, 'buttons' => $buttons];
+        }
     };
 }
 

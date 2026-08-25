@@ -33,6 +33,8 @@ function upcomingReminderFakeNotificationSender(array &$sent): NotificationSende
         {
             $this->sent[] = compact('toPhoneE164', 'templateName', 'language', 'bodyParameters') + ['type' => 'template'];
         }
+
+        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
 }
 
@@ -165,6 +167,8 @@ test('si el envío falla, no marca upcoming_reminder_sent_at y no interrumpe el 
         {
             throw new App\Application\Exceptions\NotificationDeliveryException('plantilla no aprobada todavía');
         }
+
+        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
     app()->instance(NotificationSenderInterface::class, $failingSender);
 

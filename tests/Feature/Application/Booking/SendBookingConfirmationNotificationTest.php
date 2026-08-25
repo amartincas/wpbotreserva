@@ -41,6 +41,8 @@ test('handle() manda la notificación con el teléfono y el mensaje correctos', 
         }
 
         public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons($organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
 
     (new SendBookingConfirmationNotification($fakeSender))->handle(new BookingConfirmed($booking));

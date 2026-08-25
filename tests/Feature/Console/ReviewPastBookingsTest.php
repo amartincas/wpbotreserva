@@ -47,6 +47,8 @@ function reviewPastFakeNotificationSender(array &$sent): NotificationSenderInter
         {
             $this->sent[] = compact('organization', 'toPhoneE164', 'templateName', 'language', 'bodyParameters');
         }
+
+        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
 }
 

@@ -49,6 +49,28 @@ class MetaWhatsAppClient implements ChannelClientInterface
         ]);
     }
 
+    public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void
+    {
+        $accessToken = $this->accessTokenFor($channel);
+
+        $this->post($channel, $accessToken, $to, [
+            'type' => 'interactive',
+            'interactive' => [
+                'type' => 'button',
+                'body' => ['text' => $bodyText],
+                'action' => [
+                    'buttons' => array_map(
+                        fn (array $button) => [
+                            'type' => 'reply',
+                            'reply' => ['id' => $button['id'], 'title' => $button['title']],
+                        ],
+                        $buttons
+                    ),
+                ],
+            ],
+        ]);
+    }
+
     private function accessTokenFor(Channel $channel): string
     {
         $accessToken = $channel->credentials['access_token'] ?? null;

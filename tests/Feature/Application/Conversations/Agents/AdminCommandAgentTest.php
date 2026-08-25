@@ -37,6 +37,8 @@ function adminAgentFakeNotificationSender(array &$sent): NotificationSenderInter
         }
 
         public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
 }
 

@@ -50,6 +50,15 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
     private const NO_WORDS = ['no', 'nel', 'nop', 'no gracias', 'ninguno', 'ninguna'];
 
+    // Los ids "si"/"no" ya son valores válidos de YES_WORDS/NO_WORDS de
+    // arriba — un click de botón entra por el mismo camino que si el
+    // cliente hubiera tipeado la palabra, sin que este Agent necesite
+    // saber que existió un botón.
+    private const YES_NO_BUTTONS = [
+        ['id' => 'si', 'title' => 'Sí'],
+        ['id' => 'no', 'title' => 'No'],
+    ];
+
     /** @var FlowStep[] */
     private readonly array $steps;
 
@@ -211,7 +220,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         unset($draft['_currentServiceName']);
         $draft['_awaitingAddAnotherService'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($session, '¿Agregás otro servicio? (sí/no)');
+        $this->replyYesNo($session, '¿Agregás otro servicio?');
     }
 
     /**
@@ -236,7 +245,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             return;
         }
 
-        $this->reply($session, 'Decime "sí" o "no": ¿agregás otro servicio?');
+        $this->replyYesNo($session, '¿Agregás otro servicio?');
     }
 
     /**
@@ -283,7 +292,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         unset($draft['_currentResourceName']);
         $draft['_awaitingAddAnotherResource'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($session, '¿Agregás otro recurso? (sí/no)');
+        $this->replyYesNo($session, '¿Agregás otro recurso?');
     }
 
     /**
@@ -308,7 +317,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             return;
         }
 
-        $this->reply($session, 'Decime "sí" o "no": ¿agregás otro recurso?');
+        $this->replyYesNo($session, '¿Agregás otro recurso?');
     }
 
     /**
@@ -318,7 +327,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
     {
         $draft['_awaiting_confirmation'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($session, $this->buildSummary($draft));
+        $this->replyYesNo($session, $this->buildSummary($draft));
     }
 
     /**
@@ -329,7 +338,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         $answer = mb_strtolower(trim($message->text));
 
         if (! in_array($answer, self::YES_WORDS, true)) {
-            $this->reply($session, 'Decime "sí" para confirmar y crear tu negocio con estos datos.');
+            $this->replyYesNo($session, '¿Confirmás crear tu negocio con estos datos?');
 
             return;
         }
@@ -396,12 +405,17 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             Atienden:
             {$resourcesText}
 
-            ¿Confirmás? (sí/no)
+            ¿Confirmás?
             TEXT;
     }
 
     private function reply(ConversationSession $session, string $text): void
     {
         $this->channelClient->sendTextMessage($session->channel, $session->customer_phone->value(), $text);
+    }
+
+    private function replyYesNo(ConversationSession $session, string $text): void
+    {
+        $this->channelClient->sendButtonsMessage($session->channel, $session->customer_phone->value(), $text, self::YES_NO_BUTTONS);
     }
 }

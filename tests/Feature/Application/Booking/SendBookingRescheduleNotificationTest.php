@@ -34,6 +34,8 @@ test('handle() manda la notificación de reprogramación con la fecha anterior y
         }
 
         public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons($organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
     };
 
     (new SendBookingRescheduleNotification($fakeSender))->handle(new BookingRescheduled($booking, $previousStartsAt));
