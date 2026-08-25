@@ -112,6 +112,12 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             return;
         }
 
+        if (($draft['_awaitingNameConfirmation'] ?? false) === true) {
+            $this->handleNameConfirmation($message, $session, $draft);
+
+            return;
+        }
+
         if (($draft['_awaitingAddAnotherResource'] ?? false) === true) {
             $this->handleAddAnotherResource($message, $session, $draft);
 
@@ -161,6 +167,20 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         }
 
         $result = $currentStep->extractor->extract($message->text, $draft);
+
+        // Caso real (Incremento 4): un nombre de una sola palabra ("Impulzar")
+        // a veces lo rechazaba el extractor de IA por no "sonar" a nombre de
+        // negocio, y otras veces lo aceptaba de más rápido de lo esperado —
+        // en vez de confiar ciegamente en cualquiera de los dos resultados,
+        // se confirma con la persona antes de avanzar. Nombres de varias
+        // palabras (la mayoría) no piden esta confirmación — no agregar
+        // fricción donde no hubo ambigüedad real.
+        if ($currentStep->key === 'organizationName' && $result->successful && $this->isSingleWordName($result->value)) {
+            $this->askNameConfirmation($session, $draft, $result->value);
+
+            return;
+        }
+
         $progress = $this->runner->advance($this->steps, $draft, $currentStep, $result);
 
         match ($progress->status) {
@@ -168,6 +188,58 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             FlowProgressStatus::NextStep => $this->askNextStep($session, $progress),
             FlowProgressStatus::Completed => $this->beginServicesPhase($session, $progress->draft),
         };
+    }
+
+    private function isSingleWordName(string $name): bool
+    {
+        return ! str_contains(trim($name), ' ');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function askNameConfirmation(ConversationSession $session, array $draft, string $name): void
+    {
+        $draft['_awaitingNameConfirmation'] = true;
+        $draft['_pendingOrganizationName'] = $name;
+        $this->drafts->put($session, $draft);
+        $this->replyYesNo($session, "Tu negocio se llama *{$name}*, ¿verdad?");
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleNameConfirmation(InboundMessage $message, ConversationSession $session, array $draft): void
+    {
+        $answer = mb_strtolower(trim($message->text));
+
+        if (in_array($answer, self::YES_WORDS, true)) {
+            $draft['organizationName'] = $draft['_pendingOrganizationName'];
+            unset($draft['_awaitingNameConfirmation'], $draft['_pendingOrganizationName']);
+            $this->drafts->put($session, $draft);
+
+            $nextStep = $this->runner->currentStep($this->steps, $draft);
+
+            if ($nextStep === null) {
+                $this->beginServicesPhase($session, $draft);
+
+                return;
+            }
+
+            $this->reply($session, ($nextStep->prompt)($draft));
+
+            return;
+        }
+
+        if (in_array($answer, self::NO_WORDS, true)) {
+            unset($draft['_awaitingNameConfirmation'], $draft['_pendingOrganizationName']);
+            $this->drafts->put($session, $draft);
+            $this->reply($session, '¿Cuál es el nombre de tu negocio?');
+
+            return;
+        }
+
+        $this->replyYesNo($session, "Tu negocio se llama *{$draft['_pendingOrganizationName']}*, ¿verdad?");
     }
 
     private function askNextStep(ConversationSession $session, FlowProgress $progress): void

@@ -133,6 +133,70 @@ test('el primer mensaje del flujo pregunta el nombre del negocio, sin llamar a l
     expect($drafts->get($session)['_started'])->toBeTrue();
 });
 
+test('un nombre de negocio de una sola palabra pide confirmación con botones antes de avanzar a ciudad', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Impulzar']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Impulzar'), $session);
+
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('Impulzar');
+    expect(array_column($sent[1]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($drafts->get($session)['_awaitingNameConfirmation'])->toBeTrue();
+    expect($drafts->get($session)['_pendingOrganizationName'])->toBe('Impulzar');
+    expect($drafts->get($session))->not->toHaveKey('organizationName');
+});
+
+test('confirmar el nombre corto con sí lo guarda y avanza a preguntar la ciudad', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Impulzar']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Impulzar'), $session);
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('ciudad');
+    expect($drafts->get($session)['organizationName'])->toBe('Impulzar');
+    expect($drafts->get($session))->not->toHaveKey('_awaitingNameConfirmation');
+    expect($drafts->get($session))->not->toHaveKey('_pendingOrganizationName');
+});
+
+test('rechazar el nombre corto con no vuelve a preguntar el nombre, sin guardarlo', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Impulzar']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Impulzar'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session);
+
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('nombre de tu negocio');
+    expect($drafts->get($session))->not->toHaveKey('organizationName');
+    expect($drafts->get($session))->not->toHaveKey('_awaitingNameConfirmation');
+});
+
+test('un nombre de negocio de varias palabras no pide confirmación', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Restaurante El Sabor']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
+
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('ciudad');
+    expect($drafts->get($session)['organizationName'])->toBe('Restaurante El Sabor');
+});
+
 test('si los 3 campos fijos ya están respondidos pero todavía no arrancó la fase de servicios, pasa a esa fase en vez de romper', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
