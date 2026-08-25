@@ -17,6 +17,7 @@ use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
 use App\Application\Conversations\Agents\BookingChoiceAgent;
 use App\Application\Conversations\Agents\ConversationResetAgent;
+use App\Application\Conversations\Agents\GestionNegocioAgent;
 use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
@@ -27,6 +28,7 @@ use App\Application\Conversations\Classification\ButtonIntentStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
+use App\Application\Conversations\Classification\DeterministicBusinessManagementStrategy;
 use App\Application\Conversations\Classification\ResetKeywordStrategy;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\CacheConversationDraftRepository;
@@ -109,6 +111,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(IntentClassifierInterface::class, function () {
             return new CompositeIntentClassifier([
                 $this->app->make(DeterministicAdminCommandStrategy::class),
+                $this->app->make(DeterministicBusinessManagementStrategy::class),
                 $this->app->make(ResetKeywordStrategy::class),
                 $this->app->make(ButtonIntentStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
@@ -128,6 +131,7 @@ class AppServiceProvider extends ServiceProvider
                 Intent::ReservaOGestion->value => $this->app->make(BookingChoiceAgent::class),
                 Intent::Reset->value => $this->app->make(ConversationResetAgent::class),
                 Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
+                Intent::GestionNegocio->value => $this->app->make(GestionNegocioAgent::class),
             ]);
         });
     }

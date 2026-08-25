@@ -23,6 +23,14 @@ namespace App\Domain\Conversational;
  * produce ResetKeywordStrategy, nunca la IA, ante una palabra exacta tipo
  * "salir" mientras hay un Intent activo. ConversationResetAgent limpia
  * todo y deja la próxima conversación arrancar de cero.
+ *
+ * GestionNegocio (Incremento 4, puntos D/E de la prueba real: el dueño de
+ * un negocio ya registrado quiso agregar un servicio y cambiar un horario,
+ * y no había ningún flujo para eso) — lo produce
+ * DeterministicBusinessManagementStrategy ante frases exactas del dueño
+ * ("agregar servicio", "cambiar horario", etc.), nunca la IA: mismo
+ * criterio que AdminCommand, es una acción sensible de un único dueño, no
+ * algo que valga arriesgar a una clasificación ambigua.
  */
 enum Intent: string
 {
@@ -32,5 +40,6 @@ enum Intent: string
     case ReservaOGestion = 'reserva_o_gestion';
     case Reset = 'reset';
     case AdminCommand = 'admin_command';
+    case GestionNegocio = 'gestion_negocio';
     case FueraDeAlcance = 'fuera_de_alcance';
 }

@@ -1,0 +1,77 @@
+<?php
+
+use App\Application\Contracts\EntitlementCheckerInterface;
+use App\Application\Exceptions\EntitlementDeniedException;
+use App\Application\Tenancy\AddServiceCommand;
+use App\Application\Tenancy\RegisterOrganizationCommand;
+use App\Application\Tenancy\RegisterOrganizationData;
+use App\Application\Tenancy\ResourceRegistrationData;
+use App\Application\Tenancy\ServiceRegistrationData;
+use App\Application\Tenancy\WeeklyScheduleSlot;
+use App\Domain\Tenancy\Channel;
+use App\Domain\Tenancy\Organization;
+use App\Enums\ChannelProvider;
+use App\Enums\ChannelStatus;
+use App\Enums\ChannelType;
+
+function addServiceFixtureOrganization(int $resourceCount = 1): Organization
+{
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-add-service-'.uniqid(),
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+
+    $resources = [];
+    foreach (range(1, $resourceCount) as $i) {
+        $resources[] = new ResourceRegistrationData("Recurso {$i}", [
+            new WeeklyScheduleSlot(1, '09:00', '17:00'),
+        ]);
+    }
+
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+    $result = $command->handle(new RegisterOrganizationData(
+        organizationName: 'Barbería Don Carlos',
+        ownerPhone: '+573009999999',
+        channel: $channel,
+        city: 'Bogotá',
+        address: 'Cra 7 # 45-12',
+        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        resources: $resources,
+    ));
+
+    return Organization::findOrFail($result->organizationId);
+}
+
+test('agrega un servicio nuevo y lo habilita para todos los recursos ya existentes', function () {
+    $organization = addServiceFixtureOrganization(resourceCount: 2);
+
+    $service = (new AddServiceCommand(app(EntitlementCheckerInterface::class)))
+        ->handle($organization, new ServiceRegistrationData('Barba', 20));
+
+    expect($service->name)->toBe('Barba');
+    expect($service->duration_minutes)->toBe(20);
+    expect($service->organization_id)->toBe($organization->id);
+    expect($service->resourceRequirements)->toHaveCount(1);
+    expect($service->resources)->toHaveCount(2);
+
+    // El servicio original sigue igual — esto no lo toca.
+    expect($organization->services()->count())->toBe(2);
+});
+
+test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea nada', function () {
+    $organization = addServiceFixtureOrganization();
+    $denyAll = new class implements EntitlementCheckerInterface
+    {
+        public function check($organization, string $entitlementKey, int $requestedQuantity = 1): bool
+        {
+            return false;
+        }
+    };
+
+    expect(fn () => (new AddServiceCommand($denyAll))->handle($organization, new ServiceRegistrationData('Barba', 20)))
+        ->toThrow(EntitlementDeniedException::class);
+
+    expect($organization->services()->count())->toBe(1);
+});
