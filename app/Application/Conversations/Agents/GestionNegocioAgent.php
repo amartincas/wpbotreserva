@@ -26,11 +26,13 @@ use Illuminate\Support\Collection;
  * Disparado por DeterministicBusinessManagementStrategy (nunca IA, mismo
  * criterio que AdminCommand — acción sensible de un único dueño).
  *
- * El primer turno siempre pregunta con botones qué quiere hacer, sin
- * depender de qué frase exacta disparó el Intent — así la estrategia de
- * clasificación no necesita distinguir "agregar servicio" de "cambiar
- * horario" con precisión, solo reconocer que el dueño quiere gestionar
- * algo (ver DeterministicBusinessManagementStrategy).
+ * El primer mensaje se revisa contra las mismas frases específicas que
+ * reconoce el classifier: si ya dice "agregar servicio" o "cambiar
+ * horario", salta directo a la pregunta que corresponde — no tiene
+ * sentido volver a preguntar qué quiere hacer si ya lo dijo (caso real
+ * reportado: se esperaba avanzar directo, no repetir la pregunta). El
+ * botón de elección queda solo para un disparador genérico ("administrar
+ * mi negocio") que no especifica cuál de las dos acciones.
  */
 class GestionNegocioAgent implements AgentInterface
 {
@@ -45,6 +47,26 @@ class GestionNegocioAgent implements AgentInterface
     private const ACTION_BUTTONS = [
         ['id' => self::ACTION_ADD_SERVICE, 'title' => 'Agregar servicio'],
         ['id' => self::ACTION_CHANGE_SCHEDULE, 'title' => 'Cambiar horario'],
+    ];
+
+    // Subconjunto de DeterministicBusinessManagementStrategy::TRIGGER_PHRASES
+    // — solo las que ya dicen específicamente cuál de las dos acciones
+    // quiere el dueño (las genéricas, como "administrar mi negocio", se
+    // quedan fuera a propósito y sí preguntan con botones).
+    private const ADD_SERVICE_TRIGGER_PHRASES = [
+        'agregar servicio',
+        'agregar un servicio',
+        'agregar un servicio nuevo',
+        'nuevo servicio',
+        'registrar otro servicio',
+        'registrar otro servicios',
+    ];
+
+    private const CHANGE_SCHEDULE_TRIGGER_PHRASES = [
+        'cambiar horario',
+        'cambiar el horario',
+        'modificar horario',
+        'cambiar la agenda',
     ];
 
     private const YES_NO_BUTTONS = [
@@ -117,8 +139,26 @@ class GestionNegocioAgent implements AgentInterface
             return;
         }
 
-        // Primer mensaje del flujo (disparó Intent::GestionNegocio) — no
-        // interpreta el texto que lo disparó, pregunta directo con botones.
+        // Primer mensaje del flujo (disparó Intent::GestionNegocio). Si ya
+        // es una frase específica, no hace falta preguntar de nuevo.
+        $trigger = mb_strtolower(trim($message->text));
+
+        if (in_array($trigger, self::ADD_SERVICE_TRIGGER_PHRASES, true)) {
+            $draft['_awaitingServiceName'] = true;
+            $this->drafts->put($session, $draft);
+            $this->reply($organization, $message->fromPhone, '¿Cuál es el nombre del servicio nuevo?');
+
+            return;
+        }
+
+        if (in_array($trigger, self::CHANGE_SCHEDULE_TRIGGER_PHRASES, true)) {
+            $this->beginScheduleChange($session, $organization, $message->fromPhone, $draft);
+
+            return;
+        }
+
+        // Disparador genérico ("administrar mi negocio", etc.) — ahí sí
+        // hace falta preguntar cuál de las dos acciones quiere.
         $draft['_awaitingAction'] = true;
         $this->drafts->put($session, $draft);
         $this->notifications->sendButtons($organization, $message->fromPhone, '¿Qué querés hacer?', self::ACTION_BUTTONS);

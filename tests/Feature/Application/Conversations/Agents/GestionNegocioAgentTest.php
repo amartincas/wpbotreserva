@@ -153,18 +153,49 @@ function buildGestionNegocioAgent(ConversationDraftRepositoryInterface $drafts, 
     );
 }
 
-test('el primer mensaje pregunta con botones qué quiere hacer el dueño, sin llamar a la IA', function () {
+test('un disparador genérico ("administrar mi negocio") pregunta con botones qué quiere hacer, sin llamar a la IA', function () {
     $organization = gestionNegocioFixtureOrganization();
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
     $sent = [];
     $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioNeverCalledAi());
 
-    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('administrar mi negocio'), $session, $organization);
 
     expect($sent)->toHaveCount(1);
     expect(array_column($sent[0]['buttons'], 'id'))->toBe(['agregar_servicio', 'cambiar_horario']);
     expect($drafts->get($session)['_awaitingAction'])->toBeTrue();
+});
+
+test('caso real: si el disparador ya es "agregar servicio", salta directo a pedir el nombre — no vuelve a preguntar qué quiere hacer', function () {
+    $organization = gestionNegocioFixtureOrganization();
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioNeverCalledAi());
+
+    $agent->handle(gestionNegocioFixtureMessage('Agregar Servicio'), $session, $organization);
+
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('nombre del servicio');
+    expect($sent[0])->not->toHaveKey('buttons');
+    expect($drafts->get($session)['_awaitingServiceName'])->toBeTrue();
+    expect($drafts->get($session))->not->toHaveKey('_awaitingAction');
+});
+
+test('caso real: si el disparador ya es "cambiar horario", salta directo al flujo de horario — no vuelve a preguntar qué quiere hacer', function () {
+    $organization = gestionNegocioFixtureOrganization(resourceCount: 1);
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioNeverCalledAi());
+
+    $agent->handle(gestionNegocioFixtureMessage('cambiar horario'), $session, $organization);
+
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('Recurso 1');
+    expect($drafts->get($session)['_awaitingNewSchedule'])->toBeTrue();
+    expect($drafts->get($session))->not->toHaveKey('_awaitingAction');
 });
 
 test('una elección que no es ninguno de los 2 botones vuelve a preguntar', function () {
