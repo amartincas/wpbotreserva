@@ -103,6 +103,18 @@ class GestionNegocioAgent implements AgentInterface
             return;
         }
 
+        if (($draft['_awaitingAddAnotherServiceResource'] ?? false) === true) {
+            $this->handleAddAnotherServiceResource($message, $session, $organization, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingServiceResourceSelection'] ?? false) === true) {
+            $this->handleServiceResourceSelection($message, $session, $organization, $draft);
+
+            return;
+        }
+
         if (($draft['_awaitingServiceDuration'] ?? false) === true) {
             $this->handleServiceDuration($message, $session, $organization, $draft);
 
@@ -227,13 +239,91 @@ class GestionNegocioAgent implements AgentInterface
 
         $draft['_pendingServiceDuration'] = (int) $result->value;
         unset($draft['_awaitingServiceDuration']);
+        $this->beginServiceResourceSelection($session, $organization, $message->fromPhone, $draft);
+    }
+
+    /**
+     * Cada servicio tiene su/sus propios recursos, nunca "todos los que ya
+     * existen por default" (caso real: agregar un servicio nuevo lo dejaba
+     * habilitado para cualquier recurso del negocio sin preguntar, y el
+     * dueño aclaró que no hay que asumir eso — un servicio puede tener uno
+     * o varios recursos, pero son autónomos entre sí). Si el negocio tiene
+     * un solo recurso no hay elección real que hacer, así que no se
+     * pregunta — recién con más de uno hace falta elegir.
+     *
+     * @param  array<string, mixed>  $draft
+     */
+    private function beginServiceResourceSelection(ConversationSession $session, Organization $organization, string $toPhone, array $draft): void
+    {
+        $resources = $organization->resources()->orderBy('id')->get();
+
+        if ($resources->count() <= 1) {
+            $draft['_pendingServiceResourceIds'] = $resources->pluck('id')->all();
+            $this->beginServiceConfirmation($session, $organization, $toPhone, $draft);
+
+            return;
+        }
+
+        $draft['_pendingServiceResourceIds'] = $draft['_pendingServiceResourceIds'] ?? [];
+        $draft['_awaitingServiceResourceSelection'] = true;
+        $draft['_serviceResourceOptions'] = $resources->pluck('id')->all();
+        $this->drafts->put($session, $draft);
+        $this->reply($organization, $toPhone, $this->formatServiceResourceOptions($resources, $draft['_pendingServiceName']));
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleServiceResourceSelection(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $options = $draft['_serviceResourceOptions'];
+
+        if (! preg_match('/\d+/', $message->text, $matches) || ! isset($options[((int) $matches[0]) - 1])) {
+            $this->reply($organization, $message->fromPhone, 'No entendí la opción. Respondé con el número de la persona o recurso.');
+
+            return;
+        }
+
+        $chosenId = $options[((int) $matches[0]) - 1];
+        $draft['_pendingServiceResourceIds'] = array_values(array_unique([...$draft['_pendingServiceResourceIds'], $chosenId]));
+        unset($draft['_awaitingServiceResourceSelection'], $draft['_serviceResourceOptions']);
+        $draft['_awaitingAddAnotherServiceResource'] = true;
+        $this->drafts->put($session, $draft);
+        $this->replyYesNo($organization, $message->fromPhone, '¿Agregás otra persona o recurso para este servicio?');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleAddAnotherServiceResource(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $answer = mb_strtolower(trim($message->text));
+
+        if (in_array($answer, self::YES_WORDS, true)) {
+            unset($draft['_awaitingAddAnotherServiceResource']);
+            $this->beginServiceResourceSelection($session, $organization, $message->fromPhone, $draft);
+
+            return;
+        }
+
+        if (in_array($answer, self::NO_WORDS, true)) {
+            unset($draft['_awaitingAddAnotherServiceResource']);
+            $this->beginServiceConfirmation($session, $organization, $message->fromPhone, $draft);
+
+            return;
+        }
+
+        $this->replyYesNo($organization, $message->fromPhone, '¿Agregás otra persona o recurso para este servicio?');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function beginServiceConfirmation(ConversationSession $session, Organization $organization, string $toPhone, array $draft): void
+    {
         $draft['_awaitingServiceConfirmation'] = true;
         $this->drafts->put($session, $draft);
-        $this->replyYesNo(
-            $organization,
-            $message->fromPhone,
-            "Agrego el servicio *{$draft['_pendingServiceName']}* ({$draft['_pendingServiceDuration']} min) a tu negocio, ¿confirmás?",
-        );
+        $this->replyYesNo($organization, $toPhone, $this->serviceConfirmationText($draft));
     }
 
     /**
@@ -244,10 +334,11 @@ class GestionNegocioAgent implements AgentInterface
         $answer = mb_strtolower(trim($message->text));
 
         if (in_array($answer, self::YES_WORDS, true)) {
-            $this->addService->handle($organization, new ServiceRegistrationData(
-                $draft['_pendingServiceName'],
-                $draft['_pendingServiceDuration'],
-            ));
+            $this->addService->handle(
+                $organization,
+                new ServiceRegistrationData($draft['_pendingServiceName'], $draft['_pendingServiceDuration']),
+                $draft['_pendingServiceResourceIds'],
+            );
 
             $this->drafts->forget($session);
             $this->sessions->recordIntent($session, null);
@@ -264,11 +355,31 @@ class GestionNegocioAgent implements AgentInterface
             return;
         }
 
-        $this->replyYesNo(
-            $organization,
-            $message->fromPhone,
-            "Agrego el servicio *{$draft['_pendingServiceName']}* ({$draft['_pendingServiceDuration']} min) a tu negocio, ¿confirmás?",
-        );
+        $this->replyYesNo($organization, $message->fromPhone, $this->serviceConfirmationText($draft));
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function serviceConfirmationText(array $draft): string
+    {
+        $resourceNames = Resource::whereIn('id', $draft['_pendingServiceResourceIds'])
+            ->pluck('display_name')
+            ->implode(', ');
+
+        return "Agrego el servicio *{$draft['_pendingServiceName']}* ({$draft['_pendingServiceDuration']} min), a cargo de: {$resourceNames}. ¿Confirmás?";
+    }
+
+    /**
+     * @param  Collection<int, Resource>  $resources
+     */
+    private function formatServiceResourceOptions(Collection $resources, string $serviceName): string
+    {
+        $options = $resources->values()->map(
+            fn (Resource $resource, int $i) => ($i + 1).') '.$resource->display_name
+        )->implode("\n");
+
+        return "¿Quién va a prestar el servicio *{$serviceName}*?\n\n{$options}\n\nRespondé con el número.";
     }
 
     // --- Cambiar horario -------------------------------------------------

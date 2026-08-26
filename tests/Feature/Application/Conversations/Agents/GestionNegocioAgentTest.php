@@ -213,7 +213,29 @@ test('una elección que no es ninguno de los 2 botones vuelve a preguntar', func
     expect($drafts->get($session)['_awaitingAction'])->toBeTrue();
 });
 
-test('Agregar servicio: pide nombre, duración, confirma con botones, y al confirmar lo crea habilitado para todos los recursos', function () {
+test('Agregar servicio con un solo recurso en el negocio: no pregunta quién lo presta, lo asigna directo', function () {
+    $organization = gestionNegocioFixtureOrganization(resourceCount: 1);
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
+
+    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('Recurso 1');
+    expect(array_column($sent[2]['buttons'], 'id'))->toBe(['si', 'no']);
+
+    $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
+
+    $service = $organization->fresh()->services()->where('name', 'Barba')->firstOrFail();
+    expect($service->resources)->toHaveCount(1);
+    expect($service->resources->first()->display_name)->toBe('Recurso 1');
+});
+
+test('caso real: Agregar servicio con varios recursos en el negocio pregunta quién lo presta — NO lo habilita para todos por default', function () {
     $organization = gestionNegocioFixtureOrganization(resourceCount: 2);
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
@@ -227,18 +249,54 @@ test('Agregar servicio: pide nombre, duración, confirma con botones, y al confi
 
     expect($sent)->toHaveCount(4);
     expect($sent[3]['message'])->toContain('Barba');
-    expect(array_column($sent[3]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($sent[3]['message'])->toContain('Recurso 1');
+    expect($sent[3]['message'])->toContain('Recurso 2');
+    expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
+
+    $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
+
+    expect($sent)->toHaveCount(5);
+    expect($sent[4]['message'])->toContain('otra persona o recurso');
+    expect($drafts->get($session)['_awaitingAddAnotherServiceResource'])->toBeTrue();
+
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro
+
+    expect($sent)->toHaveCount(6);
+    expect($sent[5]['message'])->toContain('Recurso 1');
+    expect($sent[5]['message'])->not->toContain('Recurso 2');
+    expect(array_column($sent[5]['buttons'], 'id'))->toBe(['si', 'no']);
     expect($organization->fresh()->services()->count())->toBe(1); // todavía no se confirmó
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
 
-    expect($sent)->toHaveCount(5);
-    expect($sent[4]['message'])->toContain('Barba');
     $service = $organization->fresh()->services()->where('name', 'Barba')->firstOrFail();
     expect($service->duration_minutes)->toBe(20);
-    expect($service->resources)->toHaveCount(2);
+    // Solo el recurso elegido — NUNCA todos por default.
+    expect($service->resources)->toHaveCount(1);
+    expect($service->resources->first()->display_name)->toBe('Recurso 1');
     expect($drafts->get($session))->toBe([]);
     expect($session->fresh()->current_intent)->toBeNull();
+});
+
+test('Agregar servicio: se puede elegir más de un recurso repitiendo "sí" en "¿agregás otro?"', function () {
+    $organization = gestionNegocioFixtureOrganization(resourceCount: 3);
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
+
+    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // Recurso 1
+    $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization); // agrega otro
+    $agent->handle(gestionNegocioFixtureMessage('3'), $session, $organization); // Recurso 3
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega más
+    $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization); // confirma
+
+    $service = $organization->fresh()->services()->where('name', 'Barba')->firstOrFail();
+    expect($service->resources)->toHaveCount(2);
+    expect($service->resources->pluck('display_name')->sort()->values()->all())->toBe(['Recurso 1', 'Recurso 3']);
 });
 
 test('Agregar servicio: si no confirma, no crea nada', function () {
@@ -248,8 +306,7 @@ test('Agregar servicio: si no confirma, no crea nada', function () {
     $sent = [];
     $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
 
-    $agent->handle(gestionNegocioFixtureMessage('hola'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('agregar_servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization);

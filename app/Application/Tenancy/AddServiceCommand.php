@@ -17,18 +17,25 @@ use Illuminate\Support\Facades\DB;
  * RegisterOrganizationCommand) — es el mismo dato, solo que ahora se
  * agrega a una Organization existente en vez de crearla.
  *
- * Todo recurso YA existente del negocio queda habilitado para el servicio
- * nuevo — mismo criterio que el alta inicial (RegisterOrganizationData):
- * cualquier recurso puede prestar cualquier servicio, sin preguntar
- * asignación fina por conversación todavía.
+ * Corrección post-prueba real: la primera versión habilitaba TODO recurso
+ * existente automáticamente (mismo criterio que el alta inicial). El
+ * dueño aclaró que eso no vale para esto — cada servicio tiene su propio
+ * recurso o recursos, que pueden coincidir con los de otro servicio pero
+ * nunca hay que asumirlo. $resourceIds es explícito, elegido por el dueño
+ * en la conversación (ver GestionNegocioAgent), nunca "todos por
+ * default" — puede ser uno o varios, ya estaba definido así desde el
+ * modelo de dominio (ServiceResourceRequirement/resource_service es N:M).
  */
 class AddServiceCommand
 {
     public function __construct(private readonly EntitlementCheckerInterface $entitlements) {}
 
-    public function handle(Organization $organization, ServiceRegistrationData $data): Service
+    /**
+     * @param  int[]  $resourceIds
+     */
+    public function handle(Organization $organization, ServiceRegistrationData $data, array $resourceIds): Service
     {
-        return DB::transaction(function () use ($organization, $data) {
+        return DB::transaction(function () use ($organization, $data, $resourceIds) {
             $this->ensureEntitled($organization, 'scheduling.max_services');
 
             $service = Service::create([
@@ -43,7 +50,7 @@ class AddServiceCommand
                 'quantity' => 1,
             ]);
 
-            $service->resources()->attach($organization->resources()->pluck('id'));
+            $service->resources()->attach($resourceIds);
 
             return $service;
         });
