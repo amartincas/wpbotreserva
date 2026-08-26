@@ -7,6 +7,7 @@ use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Conversational\Intent;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -43,12 +44,38 @@ class AiIntentClassifierStrategy implements IntentClassifierStrategy
 
     public function attempt(InboundMessage $message, ConversationSession $session): ?Intent
     {
+        // Mismo motivo que AiFieldExtractor: sin esto, una llamada lenta o
+        // fallida acá es indistinguible de "el mensaje era genuinamente
+        // ambiguo" — imposible de diagnosticar después de que pasó.
+        $startedAt = microtime(true);
+
         try {
             $response = $this->ai->getResponse($message->text, self::SYSTEM_PROMPT, []);
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            Log::warning('AiIntentClassifierStrategy: la llamada a la IA falló', [
+                'duration_ms' => (int) ((microtime(true) - $startedAt) * 1000),
+                'error' => $e->getMessage(),
+            ]);
+
             return null;
         }
 
-        return Intent::tryFrom(trim(strtolower($response)));
+        $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
+
+        if ($durationMs > 5000) {
+            Log::warning('AiIntentClassifierStrategy: la llamada a la IA tardó más de lo esperado', [
+                'duration_ms' => $durationMs,
+            ]);
+        }
+
+        $intent = Intent::tryFrom(trim(strtolower($response)));
+
+        if ($intent === null) {
+            Log::warning('AiIntentClassifierStrategy: la IA respondió algo que no es un Intent válido', [
+                'response' => $response,
+            ]);
+        }
+
+        return $intent;
     }
 }

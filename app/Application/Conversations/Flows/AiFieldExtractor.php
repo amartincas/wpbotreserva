@@ -4,6 +4,7 @@ namespace App\Application\Conversations\Flows;
 
 use App\Application\Contracts\FieldExtractorInterface;
 use App\Contracts\AiServiceInterface;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -34,12 +35,34 @@ class AiFieldExtractor implements FieldExtractorInterface
             Respondé solo con el valor extraído, sin texto adicional, sin comillas ni explicación.
             PROMPT;
 
+        // Caso real: una llamada lenta o fallida a la IA a mitad de un flujo
+        // dejó una sesión en un estado inconsistente (Incremento 4), y sin
+        // ningún log no hubo forma de reconstruir qué pasó después — solo
+        // se pudo reproducir a mano. duration_ms queda siempre, éxito o no,
+        // para poder distinguir "falló" de "tardó demasiado".
+        $startedAt = microtime(true);
+
         try {
             $response = trim($this->ai->getResponse($answer, $systemPrompt, []));
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            Log::warning('AiFieldExtractor: la llamada a la IA falló', [
+                'field' => $this->fieldLabel,
+                'duration_ms' => (int) ((microtime(true) - $startedAt) * 1000),
+                'error' => $e->getMessage(),
+            ]);
+
             return FieldExtractionResult::failure(
                 "No pude procesar tu respuesta para {$this->fieldLabel}. ¿Podés intentarlo de nuevo?"
             );
+        }
+
+        $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
+
+        if ($durationMs > 5000) {
+            Log::warning('AiFieldExtractor: la llamada a la IA tardó más de lo esperado', [
+                'field' => $this->fieldLabel,
+                'duration_ms' => $durationMs,
+            ]);
         }
 
         if ($response === '' || strtoupper($response) === 'NO_ENCONTRADO') {

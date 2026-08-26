@@ -5,6 +5,7 @@ namespace App\Application\Conversations\Flows;
 use App\Application\Contracts\FieldExtractorInterface;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
+use Illuminate\Support\Facades\Log;
 use JsonException;
 use Throwable;
 
@@ -38,10 +39,27 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
 
     public function extract(string $answer, array $draftSoFar): FieldExtractionResult
     {
+        // Mismo motivo que AiFieldExtractor: sin esto, una llamada lenta o
+        // fallida acá es indistinguible de "la IA no entendió el horario".
+        $startedAt = microtime(true);
+
         try {
             $response = trim($this->ai->getResponse($answer, self::SYSTEM_PROMPT, []));
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            Log::warning('WeeklyScheduleFieldExtractor: la llamada a la IA falló', [
+                'duration_ms' => (int) ((microtime(true) - $startedAt) * 1000),
+                'error' => $e->getMessage(),
+            ]);
+
             return $this->failure();
+        }
+
+        $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
+
+        if ($durationMs > 5000) {
+            Log::warning('WeeklyScheduleFieldExtractor: la llamada a la IA tardó más de lo esperado', [
+                'duration_ms' => $durationMs,
+            ]);
         }
 
         if ($response === '' || strtoupper($response) === 'NO_ENCONTRADO') {
