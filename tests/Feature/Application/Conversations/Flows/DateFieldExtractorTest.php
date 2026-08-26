@@ -146,3 +146,67 @@ test('un número seguido de una unidad de cantidad (años, días, personas...) n
         expect($result->successful)->toBeTrue();
     }
 });
+
+/**
+ * Segunda ronda de casos reales reportados en producción: "lunes", "lunes
+ * 31" y "08-31-2026" no se entendían (o el chequeo de mes ambiguo los
+ * rechazaba de más). Los tres se resuelven ahora en código, determinista,
+ * sin llamar a la IA — por eso usan dateExtractorNeverCalledAi().
+ */
+test('caso real: un día de la semana suelto ("lunes") resuelve al próximo, sin llamar a la IA', function () {
+    $nextMonday = now()->startOfDay()->next(1); // 1 = lunes, mismo convenio 0=domingo..6=sábado
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi());
+
+    $result = $extractor->extract('lunes', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->toBe($nextMonday->toDateString());
+});
+
+test('caso real: "el lunes que viene" también resuelve determinista (el nombre del día alcanza, el resto es ruido)', function () {
+    $nextMonday = now()->startOfDay()->next(1);
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi());
+
+    $result = $extractor->extract('el lunes que viene', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->toBe($nextMonday->toDateString());
+});
+
+test('caso real: día de la semana + número de día ("lunes 31") resuelve la fecha exacta sin pedir el mes', function () {
+    $nextMonday = now()->startOfDay()->next(1);
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi());
+
+    $result = $extractor->extract("lunes {$nextMonday->day}", []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->toBe($nextMonday->toDateString());
+});
+
+test('caso real: fecha numérica con separador resuelve determinista, sin llamar a la IA, en cualquier orden día/mes que el número >12 permita distinguir', function () {
+    // Construido para garantizar día > 12 (así "mes-día-año", el formato
+    // real que reportó el bug, queda inequívocamente resuelto) y a la vez
+    // en el futuro sin importar cuándo corra el test.
+    $target = now()->startOfMonth()->addMonths(2)->addDays(24)->startOfDay();
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi());
+
+    $diaMesAno = sprintf('%02d-%02d-%04d', $target->day, $target->month, $target->year);
+    $mesDiaAno = sprintf('%02d-%02d-%04d', $target->month, $target->day, $target->year);
+
+    foreach ([$diaMesAno, $mesDiaAno] as $texto) {
+        $result = $extractor->extract($texto, []);
+
+        expect($result->successful)->toBeTrue();
+        expect($result->value->toDateString())->toBe($target->toDateString());
+    }
+});
+
+test('fecha numérica con ambos componentes <=12 (ambiguo de verdad) asume día-mes-año, no mes-día-año', function () {
+    $target = now()->startOfMonth()->addMonths(3)->addDays(7)->startOfDay(); // día=8, mes<=12
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi());
+
+    $result = $extractor->extract(sprintf('%02d-%02d-%04d', $target->day, $target->month, $target->year), []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->toBe($target->toDateString());
+});

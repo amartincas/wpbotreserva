@@ -305,8 +305,9 @@ test('elegir "reprogramar" pide la nueva fecha y luego ofrece horarios', functio
     $session = gestionFixtureSession($organization);
     $drafts = gestionFakeDraftRepository();
     $sent = [];
-    $newDate = now()->addDays(3)->toDateString();
-    $agent = buildGestionReservaAgent($drafts, $sent, gestionQueuedAi([$newDate]));
+    // "para el jueves" ya resuelve determinista (DateFieldExtractor, caso
+    // real de producción), sin llamar a la IA.
+    $agent = buildGestionReservaAgent($drafts, $sent, gestionNeverCalledAi());
 
     $agent->handle(gestionFixtureMessage('hola'), $session, $organization);
     $agent->handle(gestionFixtureMessage('reprogramar'), $session, $organization);
@@ -323,8 +324,11 @@ test('confirmar la reprogramación llama a RescheduleBookingCommand y mueve la r
     $session = gestionFixtureSession($organization);
     $drafts = gestionFakeDraftRepository();
     $sent = [];
-    $newDate = now()->addDays(3)->toDateString();
-    $agent = buildGestionReservaAgent($drafts, $sent, gestionQueuedAi([$newDate]));
+    // "para el jueves" resuelve determinista al próximo jueves — la reserva
+    // reprogramada tiene que caer exactamente en esa fecha, no en una
+    // arbitraria.
+    $nextThursday = now()->startOfDay()->next(4); // 4 = jueves, convención 0=domingo..6=sábado
+    $agent = buildGestionReservaAgent($drafts, $sent, gestionNeverCalledAi());
 
     $agent->handle(gestionFixtureMessage('hola'), $session, $organization);
     $agent->handle(gestionFixtureMessage('reprogramar'), $session, $organization);
@@ -334,7 +338,7 @@ test('confirmar la reprogramación llama a RescheduleBookingCommand y mueve la r
 
     $fresh = $booking->fresh();
     expect($fresh->id)->toBe($booking->id);
-    expect($fresh->starts_at->toDateString())->toBe($newDate);
+    expect($fresh->starts_at->toDateString())->toBe($nextThursday->toDateString());
     expect($fresh->status)->toBe(BookingStatus::CONFIRMED);
     expect($drafts->get($session))->toBe([]);
     expect($sent[4]['message'])->toContain('reprogramado');

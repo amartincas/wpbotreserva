@@ -278,7 +278,9 @@ test('el domingo tiene disponibilidad (regresión Hito 8: WeeklyScheduleFieldExt
     $session = reservaFixtureSession($organization);
     $drafts = reservaFakeDraftRepository();
     $sent = [];
-    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi([$nextSunday->toDateString(), 'Ana']));
+    // "el domingo" ya resuelve determinista (DateFieldExtractor), sin
+    // consumir la IA — la cola solo tiene lo que consume el paso siguiente.
+    $agent = buildReservaAgent($drafts, $sent, reservaQueuedAi(['Ana']));
 
     $agent->handle(reservaFixtureMessage('hola'), $session, $organization);
     $agent->handle(reservaFixtureMessage('el domingo'), $session, $organization);
