@@ -5,6 +5,7 @@ use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Agents\GestionNegocioAgent;
 use App\Application\Conversations\EloquentConversationSessionRepository;
+use App\Application\Tenancy\AddResourceCommand;
 use App\Application\Tenancy\AddServiceCommand;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
@@ -148,6 +149,7 @@ function buildGestionNegocioAgent(ConversationDraftRepositoryInterface $drafts, 
         new EloquentConversationSessionRepository,
         gestionNegocioFakeNotificationSender($sent),
         new AddServiceCommand(app(EntitlementCheckerInterface::class)),
+        new AddResourceCommand(app(EntitlementCheckerInterface::class)),
         new ReplaceResourceScheduleCommand,
         $ai,
     );
@@ -213,7 +215,7 @@ test('una elección que no es ninguno de los 2 botones vuelve a preguntar', func
     expect($drafts->get($session)['_awaitingAction'])->toBeTrue();
 });
 
-test('Agregar servicio con un solo recurso en el negocio: no pregunta quién lo presta, lo asigna directo', function () {
+test('caso real (segunda ronda): con un solo recurso en el negocio, igual pregunta quién lo presta — como al crear el primer servicio', function () {
     $organization = gestionNegocioFixtureOrganization(resourceCount: 1);
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
@@ -226,13 +228,58 @@ test('Agregar servicio con un solo recurso en el negocio: no pregunta quién lo 
 
     expect($sent)->toHaveCount(3);
     expect($sent[2]['message'])->toContain('Recurso 1');
-    expect(array_column($sent[2]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($sent[2]['message'])->toContain('Agregar una persona nueva');
+    expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
+
+    $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro
+
+    expect(array_column($sent[array_key_last($sent)]['buttons'], 'id'))->toBe(['si', 'no']);
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
 
     $service = $organization->fresh()->services()->where('name', 'Barba')->firstOrFail();
     expect($service->resources)->toHaveCount(1);
     expect($service->resources->first()->display_name)->toBe('Recurso 1');
+});
+
+test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su propio horario, tal como al registrar el negocio', function () {
+    $organization = gestionNegocioFixtureOrganization(resourceCount: 1);
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $newScheduleJson = json_encode([
+        ['weekday' => 2, 'start_time' => '10:00', 'end_time' => '18:00'],
+    ]);
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Masaje moldeador', '45', 'Edgar Torres', $newScheduleJson]));
+
+    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('Masaje moldeador'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('45 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('0'), $session, $organization); // "Agregar una persona nueva"
+
+    expect($drafts->get($session)['_awaitingNewResourceName'])->toBeTrue();
+
+    $agent->handle(gestionNegocioFixtureMessage('Edgar Torres'), $session, $organization);
+
+    expect($drafts->get($session)['_awaitingNewResourceSchedule'])->toBeTrue();
+    expect($sent[array_key_last($sent)]['message'])->toContain('Edgar Torres');
+
+    $agent->handle(gestionNegocioFixtureMessage('martes de 10 a 18'), $session, $organization);
+
+    // La persona ya quedó creada como recurso real del negocio, con su horario.
+    $resource = Resource::where('display_name', 'Edgar Torres')->firstOrFail();
+    expect($resource->organization_id)->toBe($organization->id);
+    expect($resource->schedules)->toHaveCount(1);
+    expect($resource->schedules->first()->weekday)->toBe(2);
+    expect($drafts->get($session)['_awaitingAddAnotherServiceResource'])->toBeTrue();
+
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
+
+    $service = $organization->fresh()->services()->where('name', 'Masaje moldeador')->firstOrFail();
+    expect($service->resources)->toHaveCount(1);
+    expect($service->resources->first()->display_name)->toBe('Edgar Torres');
 });
 
 test('caso real: Agregar servicio con varios recursos en el negocio pregunta quién lo presta — NO lo habilita para todos por default', function () {

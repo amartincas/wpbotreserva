@@ -8,8 +8,10 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Flows\AiFieldExtractor;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
+use App\Application\Tenancy\AddResourceCommand;
 use App\Application\Tenancy\AddServiceCommand;
 use App\Application\Tenancy\ReplaceResourceScheduleCommand;
+use App\Application\Tenancy\ResourceRegistrationData;
 use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
@@ -74,9 +76,16 @@ class GestionNegocioAgent implements AgentInterface
         ['id' => 'no', 'title' => 'No'],
     ];
 
+    // Sentinel de texto para "quiero dar de alta una persona/recurso nueva"
+    // en vez de elegir una de las ya existentes — mismo criterio que "0) Salir"
+    // en otros menús numerados de este proyecto.
+    private const NEW_RESOURCE_OPTION = '0';
+
     private readonly AiFieldExtractor $serviceNameExtractor;
 
     private readonly AiFieldExtractor $serviceDurationExtractor;
+
+    private readonly AiFieldExtractor $resourceNameExtractor;
 
     private readonly WeeklyScheduleFieldExtractor $weeklyScheduleExtractor;
 
@@ -85,11 +94,13 @@ class GestionNegocioAgent implements AgentInterface
         private readonly ConversationSessionRepositoryInterface $sessions,
         private readonly NotificationSenderInterface $notifications,
         private readonly AddServiceCommand $addService,
+        private readonly AddResourceCommand $addResource,
         private readonly ReplaceResourceScheduleCommand $replaceSchedule,
         AiServiceInterface $ai,
     ) {
         $this->serviceNameExtractor = new AiFieldExtractor($ai, 'nombre del servicio', 'Un servicio nuevo que va a ofrecer el negocio.');
         $this->serviceDurationExtractor = new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.');
+        $this->resourceNameExtractor = new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.');
         $this->weeklyScheduleExtractor = new WeeklyScheduleFieldExtractor($ai);
     }
 
@@ -105,6 +116,18 @@ class GestionNegocioAgent implements AgentInterface
 
         if (($draft['_awaitingAddAnotherServiceResource'] ?? false) === true) {
             $this->handleAddAnotherServiceResource($message, $session, $organization, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingNewResourceSchedule'] ?? false) === true) {
+            $this->handleNewResourceSchedule($message, $session, $organization, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingNewResourceName'] ?? false) === true) {
+            $this->handleNewResourceName($message, $session, $organization, $draft);
 
             return;
         }
@@ -247,9 +270,15 @@ class GestionNegocioAgent implements AgentInterface
      * existen por default" (caso real: agregar un servicio nuevo lo dejaba
      * habilitado para cualquier recurso del negocio sin preguntar, y el
      * dueño aclaró que no hay que asumir eso — un servicio puede tener uno
-     * o varios recursos, pero son autónomos entre sí). Si el negocio tiene
-     * un solo recurso no hay elección real que hacer, así que no se
-     * pregunta — recién con más de uno hace falta elegir.
+     * o varios recursos, pero son autónomos entre sí).
+     *
+     * Corrección post-prueba real (segunda ronda): aun con un solo recurso
+     * existente, el dueño espera que el bot pregunte y ofrezca la opción de
+     * dar de alta una persona nueva — "debe comportarse tal cual como se
+     * crea el primer servicio, debe preguntar el recurso y su horario". Así
+     * que ya no se salta la pregunta con <=1 recurso: siempre se pregunta,
+     * salvo que el negocio no tenga NINGÚN recurso todavía (ahí no hay nada
+     * que elegir, se va directo a dar de alta uno).
      *
      * @param  array<string, mixed>  $draft
      */
@@ -257,14 +286,16 @@ class GestionNegocioAgent implements AgentInterface
     {
         $resources = $organization->resources()->orderBy('id')->get();
 
-        if ($resources->count() <= 1) {
-            $draft['_pendingServiceResourceIds'] = $resources->pluck('id')->all();
-            $this->beginServiceConfirmation($session, $organization, $toPhone, $draft);
+        $draft['_pendingServiceResourceIds'] = $draft['_pendingServiceResourceIds'] ?? [];
+
+        if ($resources->isEmpty()) {
+            $draft['_awaitingNewResourceName'] = true;
+            $this->drafts->put($session, $draft);
+            $this->reply($organization, $toPhone, '¿Cómo se llama la persona o recurso que va a prestar este servicio?');
 
             return;
         }
 
-        $draft['_pendingServiceResourceIds'] = $draft['_pendingServiceResourceIds'] ?? [];
         $draft['_awaitingServiceResourceSelection'] = true;
         $draft['_serviceResourceOptions'] = $resources->pluck('id')->all();
         $this->drafts->put($session, $draft);
@@ -276,10 +307,21 @@ class GestionNegocioAgent implements AgentInterface
      */
     private function handleServiceResourceSelection(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
     {
+        $answer = trim($message->text);
+
+        if ($answer === self::NEW_RESOURCE_OPTION) {
+            unset($draft['_awaitingServiceResourceSelection'], $draft['_serviceResourceOptions']);
+            $draft['_awaitingNewResourceName'] = true;
+            $this->drafts->put($session, $draft);
+            $this->reply($organization, $message->fromPhone, '¿Cómo se llama la persona o recurso nueva?');
+
+            return;
+        }
+
         $options = $draft['_serviceResourceOptions'];
 
-        if (! preg_match('/\d+/', $message->text, $matches) || ! isset($options[((int) $matches[0]) - 1])) {
-            $this->reply($organization, $message->fromPhone, 'No entendí la opción. Respondé con el número de la persona o recurso.');
+        if (! preg_match('/\d+/', $answer, $matches) || ! isset($options[((int) $matches[0]) - 1])) {
+            $this->reply($organization, $message->fromPhone, 'No entendí la opción. Respondé con el número de la persona o recurso, o 0 para agregar una nueva.');
 
             return;
         }
@@ -287,6 +329,51 @@ class GestionNegocioAgent implements AgentInterface
         $chosenId = $options[((int) $matches[0]) - 1];
         $draft['_pendingServiceResourceIds'] = array_values(array_unique([...$draft['_pendingServiceResourceIds'], $chosenId]));
         unset($draft['_awaitingServiceResourceSelection'], $draft['_serviceResourceOptions']);
+        $draft['_awaitingAddAnotherServiceResource'] = true;
+        $this->drafts->put($session, $draft);
+        $this->replyYesNo($organization, $message->fromPhone, '¿Agregás otra persona o recurso para este servicio?');
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleNewResourceName(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $result = $this->resourceNameExtractor->extract($message->text, $draft);
+
+        if (! $result->successful) {
+            $this->reply($organization, $message->fromPhone, $result->reason);
+
+            return;
+        }
+
+        $draft['_pendingNewResourceName'] = $result->value;
+        unset($draft['_awaitingNewResourceName']);
+        $draft['_awaitingNewResourceSchedule'] = true;
+        $this->drafts->put($session, $draft);
+        $this->reply($organization, $message->fromPhone, "¿Qué días y en qué horario atiende {$result->value}? (ej: \"Lunes a Viernes de 9 a 17\")");
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleNewResourceSchedule(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $result = $this->weeklyScheduleExtractor->extract($message->text, $draft);
+
+        if (! $result->successful) {
+            $this->reply($organization, $message->fromPhone, $result->reason);
+
+            return;
+        }
+
+        $resource = $this->addResource->handle(
+            $organization,
+            new ResourceRegistrationData($draft['_pendingNewResourceName'], $result->value),
+        );
+
+        $draft['_pendingServiceResourceIds'] = array_values(array_unique([...$draft['_pendingServiceResourceIds'], $resource->id]));
+        unset($draft['_awaitingNewResourceSchedule'], $draft['_pendingNewResourceName']);
         $draft['_awaitingAddAnotherServiceResource'] = true;
         $this->drafts->put($session, $draft);
         $this->replyYesNo($organization, $message->fromPhone, '¿Agregás otra persona o recurso para este servicio?');
@@ -379,7 +466,7 @@ class GestionNegocioAgent implements AgentInterface
             fn (Resource $resource, int $i) => ($i + 1).') '.$resource->display_name
         )->implode("\n");
 
-        return "¿Quién va a prestar el servicio *{$serviceName}*?\n\n{$options}\n\nRespondé con el número.";
+        return "¿Quién va a prestar el servicio *{$serviceName}*?\n\n{$options}\n0) Agregar una persona nueva\n\nRespondé con el número.";
     }
 
     // --- Cambiar horario -------------------------------------------------
