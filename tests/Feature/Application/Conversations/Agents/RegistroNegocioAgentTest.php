@@ -217,19 +217,38 @@ test('si los 3 campos fijos ya están respondidos pero todavía no arrancó la f
     expect($drafts->get($session)['services'])->toBe([]);
 });
 
-test('re-pregunta con el motivo cuando el extractor no puede interpretar la respuesta, sin avanzar el draft', function () {
+test('re-pregunta con el motivo cuando el extractor no puede interpretar la respuesta en un campo que no es el nombre, sin avanzar el draft', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
+    // Arranca ya con el nombre puesto para que el campo actual sea "city",
+    // no "organizationName" (ese campo tiene su propio comportamiento,
+    // probado aparte abajo).
+    $drafts->put($session, ['_started' => true, 'organizationName' => 'Restaurante El Sabor']);
     $sent = [];
     $ai = registroQueuedAi(['NO_ENCONTRADO']);
     $agent = buildRegistroAgent($drafts, $sent, $ai);
 
-    $agent->handle(registroFixtureMessage('hola'), $session);
     $agent->handle(registroFixtureMessage('asdkjhasd'), $session);
 
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('ciudad');
+    expect($drafts->get($session))->not->toHaveKey('city');
+});
+
+test('caso real (segunda ronda): si la IA rechaza de plano el nombre del negocio (NO_ENCONTRADO), usa la respuesta cruda como candidato y confirma en vez de repetir "no entendí"', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['NO_ENCONTRADO']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Impulzar'), $session);
+
     expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->not->toBe($sent[0]['message']);
-    expect($drafts->get($session))->not->toHaveKey('organizationName');
+    expect($sent[1]['message'])->toContain('Impulzar');
+    expect(array_column($sent[1]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($drafts->get($session)['_awaitingNameConfirmation'])->toBeTrue();
+    expect($drafts->get($session)['_pendingOrganizationName'])->toBe('Impulzar');
 });
 
 test('Incremento 4: recolecta varios servicios y varios recursos uno a la vez (bucle con "¿agregás otro?") hasta llegar al resumen de confirmación', function () {
@@ -361,9 +380,47 @@ test('al confirmar con sí, registra la organización con sus servicios/recursos
 
     expect($drafts->get($session))->toBe([]);
     expect($session->fresh()->current_intent)->toBeNull();
+    expect($session->fresh()->organization_id)->toBe($org->id);
 
     expect($sent)->toHaveCount(1);
     expect($sent[0]['message'])->toContain('Restaurante El Sabor');
+});
+
+test('caso real: si la sesión ya estaba memoizada a otra organización (número de prueba compartido), el registro la reengancha a la recién creada', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sessions = new EloquentConversationSessionRepository;
+    $sessions->recordIntent($session, Intent::RegistroNegocio);
+
+    // Simula el bug real: esta sesión había quedado pinneada a OTRA
+    // organización de una prueba anterior con el mismo número compartido.
+    $staleOrganization = Organization::create(['name' => 'AMC Studios', 'owner_phone' => '+573128340860']);
+    $sessions->attachOrganization($session, $staleOrganization);
+    expect($session->fresh()->organization_id)->toBe($staleOrganization->id);
+
+    $drafts->put($session, [
+        '_started' => true,
+        '_awaiting_confirmation' => true,
+        'organizationName' => 'Impulzar',
+        'city' => 'Bogotá',
+        'address' => 'Calle 15 #20-10',
+        'services' => [
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30],
+        ],
+        'resources' => [
+            ['name' => 'Carlos', 'weeklySchedule' => [new App\Application\Tenancy\WeeklyScheduleSlot(1, '09:00', '17:00')]],
+        ],
+    ]);
+
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
+
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    $newOrganization = Organization::where('name', 'Impulzar')->firstOrFail();
+    // Ya no apunta a la organización vieja — apunta a la que este mismo
+    // teléfono acaba de crear como dueño.
+    expect($session->fresh()->organization_id)->toBe($newOrganization->id);
 });
 
 test('si la respuesta de confirmación no es un sí, vuelve a pedir confirmación sin ejecutar el Command', function () {

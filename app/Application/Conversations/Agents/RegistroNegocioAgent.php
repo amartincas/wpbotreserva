@@ -20,6 +20,7 @@ use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
+use App\Domain\Tenancy\Organization;
 
 /**
  * Único Agent capaz de operar sin Organization resuelta (implementa
@@ -168,13 +169,26 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
         $result = $currentStep->extractor->extract($message->text, $draft);
 
-        // Caso real (Incremento 4): un nombre de una sola palabra ("Impulzar")
-        // a veces lo rechazaba el extractor de IA por no "sonar" a nombre de
-        // negocio, y otras veces lo aceptaba de más rápido de lo esperado —
-        // en vez de confiar ciegamente en cualquiera de los dos resultados,
-        // se confirma con la persona antes de avanzar. Nombres de varias
-        // palabras (la mayoría) no piden esta confirmación — no agregar
-        // fricción donde no hubo ambigüedad real.
+        // Caso real (Incremento 4, y de nuevo en una segunda ronda de
+        // pruebas): un nombre de una sola palabra ("Impulzar") a veces lo
+        // rechazaba el extractor de IA de plano (NO_ENCONTRADO) por no
+        // "sonar" a nombre de negocio, y otras veces lo aceptaba más rápido
+        // de lo esperado — en vez de confiar ciegamente en cualquiera de los
+        // dos resultados, se confirma con la persona antes de avanzar.
+        // Cuando el extractor directamente falla en esta pregunta puntual
+        // ("¿cómo se llama tu negocio?"), no tiene sentido volver a
+        // preguntar lo mismo con un "no entendí" — la respuesta cruda YA es
+        // el candidato más probable, así que se usa tal cual y se confirma
+        // (el mismo mecanismo de abajo ya cubre el caso de que esté mal).
+        // Nombres de varias palabras que SÍ extrajo la IA con éxito no piden
+        // esta confirmación — no agregar fricción donde no hubo ambigüedad
+        // real.
+        if ($currentStep->key === 'organizationName' && ! $result->successful) {
+            $this->askNameConfirmation($session, $draft, trim($message->text));
+
+            return;
+        }
+
         if ($currentStep->key === 'organizationName' && $result->successful && $this->isSingleWordName($result->value)) {
             $this->askNameConfirmation($session, $draft, $result->value);
 
@@ -433,6 +447,17 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             services: $services,
             resources: $resources,
         ));
+
+        // Caso real: en un Channel que ya tenía otra Organization vinculada
+        // (número de prueba compartido entre varios pilotos), la sesión de
+        // este mismo teléfono había quedado memoizada a esa otra
+        // organización desde antes (SingleOrganizationResolver reusa
+        // session->organization_id sin volver a resolver). Sin este
+        // re-attach, el resto de la conversación — ej. "quiero agregar un
+        // servicio" en el negocio recién creado — seguía resolviendo contra
+        // la organización vieja, y como el dueño no coincidía, la acción se
+        // rechazaba en silencio y el mensaje caía a fuera de alcance.
+        $this->sessions->attachOrganization($session, Organization::findOrFail($result->organizationId));
 
         $this->drafts->forget($session);
         $this->sessions->recordIntent($session, null);
