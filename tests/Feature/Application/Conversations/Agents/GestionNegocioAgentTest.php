@@ -356,7 +356,9 @@ test('Agregar servicio: si no confirma, no crea nada', function () {
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro recurso
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no confirma
 
     expect($organization->fresh()->services()->count())->toBe(1);
     expect($drafts->get($session))->toBe([]);
