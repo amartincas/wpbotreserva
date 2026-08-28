@@ -126,7 +126,7 @@ function reservaFixtureOrganization(string $phoneNumberId = 'wamid-reserva'): Or
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
             range(0, 6)
@@ -160,8 +160,8 @@ function reservaFixtureOrganizationMultiService(string $phoneNumberId = 'wamid-r
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [
-            new ServiceRegistrationData('Corte de cabello', 30),
-            new ServiceRegistrationData('Barba', 20),
+            new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0]),
+            new ServiceRegistrationData('Barba', 20, resourceKeys: [0]),
         ],
         resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),

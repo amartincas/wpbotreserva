@@ -3,6 +3,7 @@
 namespace App\Application\Conversations\Flows;
 
 use App\Application\Contracts\FieldExtractorInterface;
+use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Contracts\AiServiceInterface;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -23,6 +24,7 @@ class AiFieldExtractor implements FieldExtractorInterface
         private readonly AiServiceInterface $ai,
         private readonly string $fieldLabel,
         private readonly string $fieldDescription,
+        private readonly ?BotMessageRepository $botMessages = null,
     ) {}
 
     public function extract(string $answer, array $draftSoFar): FieldExtractionResult
@@ -52,7 +54,8 @@ class AiFieldExtractor implements FieldExtractorInterface
             ]);
 
             return FieldExtractionResult::failure(
-                "No pude procesar tu respuesta para {$this->fieldLabel}. ¿Podés intentarlo de nuevo?"
+                $this->botMessages?->render('extractor.fallo_ia', ['campo' => $this->fieldLabel])
+                    ?? "No pude procesar tu respuesta para {$this->fieldLabel}. ¿Podés intentarlo de nuevo?"
             );
         }
 
@@ -67,7 +70,8 @@ class AiFieldExtractor implements FieldExtractorInterface
 
         if ($response === '' || strtoupper($response) === 'NO_ENCONTRADO') {
             return FieldExtractionResult::failure(
-                "No entendí tu respuesta para {$this->fieldLabel}. ¿Podés ser más específico?"
+                $this->botMessages?->render('extractor.no_entendido', ['campo' => $this->fieldLabel])
+                    ?? "No entendí tu respuesta para {$this->fieldLabel}. ¿Podés ser más específico?"
             );
         }
 

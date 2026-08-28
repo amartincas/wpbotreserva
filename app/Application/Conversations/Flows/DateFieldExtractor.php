@@ -3,6 +3,7 @@
 namespace App\Application\Conversations\Flows;
 
 use App\Application\Contracts\FieldExtractorInterface;
+use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Contracts\AiServiceInterface;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Log;
@@ -36,21 +37,10 @@ use Throwable;
  */
 class DateFieldExtractor implements FieldExtractorInterface
 {
-    // Mismo convenio que ResourceSchedule.weekday / WeeklyScheduleFieldExtractor
-    // (0=domingo..6=sábado) — y el mismo que espera CarbonImmutable::next().
-    private const WEEKDAY_NAMES = [
-        'domingo' => 0,
-        'lunes' => 1,
-        'martes' => 2,
-        'miercoles' => 3,
-        'miércoles' => 3,
-        'jueves' => 4,
-        'viernes' => 5,
-        'sabado' => 6,
-        'sábado' => 6,
-    ];
-
-    public function __construct(private readonly AiServiceInterface $ai) {}
+    public function __construct(
+        private readonly AiServiceInterface $ai,
+        private readonly ?BotMessageRepository $botMessages = null,
+    ) {}
 
     public function extract(string $answer, array $draftSoFar): FieldExtractionResult
     {
@@ -61,7 +51,9 @@ class DateFieldExtractor implements FieldExtractorInterface
         }
 
         if ($this->isAmbiguousDayWithoutMonth($answer)) {
-            return FieldExtractionResult::failure('¿De qué mes? Por ejemplo: "24 de agosto".');
+            return FieldExtractionResult::failure(
+                $this->botMessages?->render('fecha.ambigua_mes') ?? '¿De qué mes? Por ejemplo: "24 de agosto".'
+            );
         }
 
         $today = now()->toDateString();
@@ -106,7 +98,7 @@ class DateFieldExtractor implements FieldExtractorInterface
         }
 
         if ($date->isBefore(now()->startOfDay())) {
-            return FieldExtractionResult::failure('Esa fecha ya pasó. ¿Para qué día querés el turno?');
+            return FieldExtractionResult::failure($this->pastDateMessage());
         }
 
         return FieldExtractionResult::success($date);
@@ -114,7 +106,15 @@ class DateFieldExtractor implements FieldExtractorInterface
 
     private function failure(): FieldExtractionResult
     {
-        return FieldExtractionResult::failure('No entendí la fecha. ¿Podés decirme para qué día querés el turno?');
+        return FieldExtractionResult::failure(
+            $this->botMessages?->render('fecha.no_entendida')
+                ?? 'No entendí la fecha. ¿Podés decirme para qué día querés el turno?'
+        );
+    }
+
+    private function pastDateMessage(): string
+    {
+        return $this->botMessages?->render('fecha.ya_paso') ?? 'Esa fecha ya pasó. ¿Para qué día querés el turno?';
     }
 
     /**
@@ -149,9 +149,9 @@ class DateFieldExtractor implements FieldExtractorInterface
 
     private function matchWeekday(string $normalized): ?int
     {
-        foreach (self::WEEKDAY_NAMES as $name => $isoWeekday) {
+        foreach (SpanishWeekdayNames::NAMES as $name => $weekday) {
             if (preg_match('/\b'.$name.'\b/u', $normalized)) {
-                return $isoWeekday;
+                return $weekday;
             }
         }
 
@@ -255,7 +255,7 @@ class DateFieldExtractor implements FieldExtractorInterface
     private function buildDateResult(CarbonImmutable $date): FieldExtractionResult
     {
         if ($date->isBefore(CarbonImmutable::now()->startOfDay())) {
-            return FieldExtractionResult::failure('Esa fecha ya pasó. ¿Para qué día querés el turno?');
+            return FieldExtractionResult::failure($this->pastDateMessage());
         }
 
         return FieldExtractionResult::success($date);

@@ -33,7 +33,7 @@ function registerOrgData(Channel $channel, array $overrides = []): RegisterOrgan
         city: $overrides['city'] ?? 'Bogotá',
         address: $overrides['address'] ?? 'Cra 7 # 45-12',
         services: $overrides['services'] ?? [
-            new ServiceRegistrationData('Corte de cabello', 30),
+            new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0]),
         ],
         resources: $overrides['resources'] ?? [
             new ResourceRegistrationData('Carlos', [
@@ -75,15 +75,16 @@ test('registra una organización de un servicio y un recurso: location, resource
     expect($resource->schedules)->toHaveCount(2);
 });
 
-test('Incremento 4: registra varios servicios y varios recursos, cada recurso con su propio horario, y todos quedan cruzados entre sí', function () {
+test('Fase 1: cada servicio queda asociado solo a los recursos elegidos para él — un recurso puede prestar varios servicios, pero nunca se genera el cruce cartesiano completo', function () {
     $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
+    // Índices de $resources: 0=Carlos, 1=Ana.
     $result = $command->handle(registerOrgData($channel, [
         'services' => [
-            new ServiceRegistrationData('Corte de cabello', 30),
-            new ServiceRegistrationData('Barba', 20),
-            new ServiceRegistrationData('Corte + Barba', 45),
+            new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0]), // solo Carlos
+            new ServiceRegistrationData('Barba', 20, resourceKeys: [1]), // solo Ana
+            new ServiceRegistrationData('Corte + Barba', 45, resourceKeys: [0, 1]), // ambos
         ],
         'resources' => [
             new ResourceRegistrationData('Carlos', [
@@ -102,18 +103,34 @@ test('Incremento 4: registra varios servicios y varios recursos, cada recurso co
     expect($result->resourceIds)->toHaveCount(2);
     $carlos = $org->resources->firstWhere('display_name', 'Carlos');
     $ana = $org->resources->firstWhere('display_name', 'Ana');
+
+    // Cada recurso conserva su propio horario.
     expect($carlos->schedules)->toHaveCount(1);
     expect($ana->schedules)->toHaveCount(2);
 
     expect($org->services)->toHaveCount(3);
     expect($result->serviceIds)->toHaveCount(3);
 
-    // Todo recurso queda habilitado para todo servicio (cruce N:M completo,
-    // ver nota de diseño en RegisterOrganizationData).
-    $expectedResourceIds = collect([$carlos->id, $ana->id])->sort()->values()->all();
+    $corte = $org->services->firstWhere('name', 'Corte de cabello');
+    $barba = $org->services->firstWhere('name', 'Barba');
+    $corteYBarba = $org->services->firstWhere('name', 'Corte + Barba');
+
+    // Un servicio puede tener un recurso distinto de otro — nada de "todo
+    // recurso presta todo servicio".
+    expect($corte->resources->pluck('id')->all())->toBe([$carlos->id]);
+    expect($barba->resources->pluck('id')->all())->toBe([$ana->id]);
+
+    // Un mismo recurso puede prestar varios servicios cuando así se eligió.
+    expect($corteYBarba->resources->pluck('id')->sort()->values()->all())
+        ->toBe(collect([$carlos->id, $ana->id])->sort()->values()->all());
+
+    // Negativo explícito: ni Corte de cabello tiene a Ana, ni Barba tiene a
+    // Carlos — si el cruce cartesiano volviera, esto fallaría.
+    expect($corte->resources->pluck('id'))->not->toContain($ana->id);
+    expect($barba->resources->pluck('id'))->not->toContain($carlos->id);
+
     foreach ($org->services as $service) {
         expect($service->resourceRequirements)->toHaveCount(1);
-        expect($service->resources->pluck('id')->sort()->values()->all())->toBe($expectedResourceIds);
     }
 });
 

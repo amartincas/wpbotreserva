@@ -4,6 +4,7 @@ use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Agents\GestionNegocioAgent;
+use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Tenancy\AddResourceCommand;
 use App\Application\Tenancy\AddServiceCommand;
@@ -121,7 +122,7 @@ function gestionNegocioFixtureOrganization(int $resourceCount = 1): Organization
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: $resources,
     ));
 
@@ -151,6 +152,7 @@ function buildGestionNegocioAgent(ConversationDraftRepositoryInterface $drafts, 
         new AddServiceCommand(app(EntitlementCheckerInterface::class)),
         new AddResourceCommand(app(EntitlementCheckerInterface::class)),
         new ReplaceResourceScheduleCommand,
+        new BotMessageRepository,
         $ai,
     );
 }
@@ -164,8 +166,9 @@ test('un disparador genérico ("administrar mi negocio") pregunta con botones qu
 
     $agent->handle(gestionNegocioFixtureMessage('administrar mi negocio'), $session, $organization);
 
-    expect($sent)->toHaveCount(1);
-    expect(array_column($sent[0]['buttons'], 'id'))->toBe(['agregar_servicio', 'cambiar_horario']);
+    expect($sent)->toHaveCount(2);
+    expect($sent[0]['message'])->toBe('¡Hola! Soy el asistente de WpbotReserva.');
+    expect(array_column($sent[1]['buttons'], 'id'))->toBe(['agregar_servicio', 'cambiar_horario']);
     expect($drafts->get($session)['_awaitingAction'])->toBeTrue();
 });
 
@@ -178,9 +181,9 @@ test('caso real: si el disparador ya es "agregar servicio", salta directo a pedi
 
     $agent->handle(gestionNegocioFixtureMessage('Agregar Servicio'), $session, $organization);
 
-    expect($sent)->toHaveCount(1);
-    expect($sent[0]['message'])->toContain('nombre del servicio');
-    expect($sent[0])->not->toHaveKey('buttons');
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('nombre del servicio');
+    expect($sent[1])->not->toHaveKey('buttons');
     expect($drafts->get($session)['_awaitingServiceName'])->toBeTrue();
     expect($drafts->get($session))->not->toHaveKey('_awaitingAction');
 });
@@ -194,8 +197,8 @@ test('caso real: si el disparador ya es "cambiar horario", salta directo al fluj
 
     $agent->handle(gestionNegocioFixtureMessage('cambiar horario'), $session, $organization);
 
-    expect($sent)->toHaveCount(1);
-    expect($sent[0]['message'])->toContain('Recurso 1');
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('Recurso 1');
     expect($drafts->get($session)['_awaitingNewSchedule'])->toBeTrue();
     expect($drafts->get($session))->not->toHaveKey('_awaitingAction');
 });
@@ -210,8 +213,8 @@ test('una elección que no es ninguno de los 2 botones vuelve a preguntar', func
     $agent->handle(gestionNegocioFixtureMessage('hola'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('no sé'), $session, $organization);
 
-    expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('No entendí');
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('No entendí');
     expect($drafts->get($session)['_awaitingAction'])->toBeTrue();
 });
 
@@ -226,9 +229,9 @@ test('caso real (segunda ronda): con un solo recurso en el negocio, igual pregun
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
 
-    expect($sent)->toHaveCount(3);
-    expect($sent[2]['message'])->toContain('Recurso 1');
-    expect($sent[2]['message'])->toContain('Agregar una persona nueva');
+    expect($sent)->toHaveCount(4);
+    expect($sent[3]['message'])->toContain('Recurso 1');
+    expect($sent[3]['message'])->toContain('Agregar una persona nueva');
     expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
@@ -294,24 +297,24 @@ test('caso real: Agregar servicio con varios recursos en el negocio pregunta qui
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
 
-    expect($sent)->toHaveCount(4);
-    expect($sent[3]['message'])->toContain('Barba');
-    expect($sent[3]['message'])->toContain('Recurso 1');
-    expect($sent[3]['message'])->toContain('Recurso 2');
+    expect($sent)->toHaveCount(5);
+    expect($sent[4]['message'])->toContain('Barba');
+    expect($sent[4]['message'])->toContain('Recurso 1');
+    expect($sent[4]['message'])->toContain('Recurso 2');
     expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
 
-    expect($sent)->toHaveCount(5);
-    expect($sent[4]['message'])->toContain('otra persona o recurso');
+    expect($sent)->toHaveCount(6);
+    expect($sent[5]['message'])->toContain('otra persona o recurso');
     expect($drafts->get($session)['_awaitingAddAnotherServiceResource'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro
 
-    expect($sent)->toHaveCount(6);
-    expect($sent[5]['message'])->toContain('Recurso 1');
-    expect($sent[5]['message'])->not->toContain('Recurso 2');
-    expect(array_column($sent[5]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($sent)->toHaveCount(7);
+    expect($sent[6]['message'])->toContain('Recurso 1');
+    expect($sent[6]['message'])->not->toContain('Recurso 2');
+    expect(array_column($sent[6]['buttons'], 'id'))->toBe(['si', 'no']);
     expect($organization->fresh()->services()->count())->toBe(1); // todavía no se confirmó
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
@@ -375,8 +378,8 @@ test('Cambiar horario: con un solo recurso, no pregunta cuál — pide directo e
     $agent->handle(gestionNegocioFixtureMessage('hola'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('cambiar_horario'), $session, $organization);
 
-    expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('Recurso 1');
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('Recurso 1');
     expect($drafts->get($session)['_awaitingNewSchedule'])->toBeTrue();
     expect($drafts->get($session))->not->toHaveKey('_awaitingResourceSelection');
 });
@@ -391,9 +394,9 @@ test('Cambiar horario: con varios recursos, pregunta cuál (numerado)', function
     $agent->handle(gestionNegocioFixtureMessage('hola'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('cambiar_horario'), $session, $organization);
 
-    expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('Recurso 1');
-    expect($sent[1]['message'])->toContain('Recurso 2');
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('Recurso 1');
+    expect($sent[2]['message'])->toContain('Recurso 2');
     expect($drafts->get($session)['_awaitingResourceSelection'])->toBeTrue();
 });
 
@@ -412,9 +415,9 @@ test('Cambiar horario: reemplaza el horario completo del recurso elegido al conf
     $agent->handle(gestionNegocioFixtureMessage('2'), $session, $organization); // elige "Recurso 2"
     $agent->handle(gestionNegocioFixtureMessage('viernes de 2 a 8pm'), $session, $organization);
 
-    expect($sent)->toHaveCount(4);
-    expect($sent[3]['message'])->toContain('Recurso 2');
-    expect(array_column($sent[3]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($sent)->toHaveCount(5);
+    expect($sent[4]['message'])->toContain('Recurso 2');
+    expect(array_column($sent[4]['buttons'], 'id'))->toBe(['si', 'no']);
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
 
@@ -441,7 +444,26 @@ test('Cambiar horario: una selección de recurso inválida re-pregunta sin avanz
     $agent->handle(gestionNegocioFixtureMessage('cambiar_horario'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('no sé cuál'), $session, $organization);
 
-    expect($sent)->toHaveCount(3);
-    expect($sent[2]['message'])->toContain('No entendí la opción');
+    expect($sent)->toHaveCount(4);
+    expect($sent[3]['message'])->toContain('No entendí la opción');
     expect($drafts->get($session)['_awaitingResourceSelection'])->toBeTrue();
+});
+
+test('Fase 3: el saludo se manda en burbuja aparte antes de la primera pregunta, una sola vez por conversación', function () {
+    $organization = gestionNegocioFixtureOrganization();
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioNeverCalledAi());
+
+    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('no sé'), $session, $organization);
+
+    // El saludo es el primer mensaje, en su propia burbuja (no concatenado
+    // a "¿Cuál es el nombre del servicio nuevo?").
+    expect($sent[0]['message'])->toBe('¡Hola! Soy el asistente de WpbotReserva.');
+    expect($sent[0]['message'])->not->toContain('nombre del servicio');
+
+    // No se repite en el segundo mensaje de la misma conversación.
+    expect(collect($sent)->pluck('message')->filter(fn ($m) => $m === '¡Hola! Soy el asistente de WpbotReserva.'))->toHaveCount(1);
 });

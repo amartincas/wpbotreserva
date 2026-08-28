@@ -6,11 +6,11 @@ use App\Domain\Tenancy\Channel;
 
 /**
  * Incremento 4: generalizado a N servicios / N recursos (antes, uno de
- * cada, Parte XII/XVI). Cada recurso puede tener su propio horario; todo
- * recurso queda habilitado para prestar todo servicio (el caso común —
- * cualquier estilista puede hacer cualquier corte) en vez de pedir la
- * asignación fina por conversación, que multiplicaría las preguntas por
- * R×S sin que ningún piloto real lo haya necesitado todavía.
+ * cada, Parte XII/XVI). Cada recurso puede tener su propio horario. Qué
+ * recurso presta cada servicio es explícito por servicio
+ * (ServiceRegistrationData::$resourceKeys, elegido en la conversación vía
+ * ServiceResourceSelectionFlow) — ya no se asume "todo recurso presta todo
+ * servicio".
  */
 final class RegisterOrganizationData
 {

@@ -68,7 +68,7 @@ function reviewPastFixtureOrganization(string $phoneNumberId = 'wamid-review-pas
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '00:00', endTime: '23:59'),
             range(0, 6)

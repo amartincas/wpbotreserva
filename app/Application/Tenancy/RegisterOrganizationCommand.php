@@ -45,7 +45,7 @@ class RegisterOrganizationCommand
 
             $this->ensureEntitled($organization, 'scheduling.max_resources', count($data->resources));
             $resourceIds = [];
-            foreach ($data->resources as $resourceData) {
+            foreach ($data->resources as $index => $resourceData) {
                 $resource = Resource::create([
                     'organization_id' => $organization->id,
                     'location_id' => $location->id,
@@ -62,7 +62,12 @@ class RegisterOrganizationCommand
                     ]);
                 }
 
-                $resourceIds[] = $resource->id;
+                // Se indexa por la posición original en $data->resources
+                // (no array_push secuencial) porque es exactamente ese
+                // índice el que ServiceRegistrationData::$resourceKeys usa
+                // para referenciar "cuál de los recursos recolectados en la
+                // conversación" — ver DraftResourceCatalog.
+                $resourceIds[$index] = $resource->id;
             }
 
             $this->ensureEntitled($organization, 'scheduling.max_services', count($data->services));
@@ -80,10 +85,13 @@ class RegisterOrganizationCommand
                     'quantity' => 1,
                 ]);
 
-                // Todo recurso presta todo servicio (ver nota en
-                // RegisterOrganizationData) — asignación fina por
-                // conversación queda para cuando un piloto real lo pida.
-                $service->resources()->attach($resourceIds);
+                // Cada servicio queda asociado solo a los recursos elegidos
+                // explícitamente para él durante la conversación — ya no
+                // "todo recurso presta todo servicio" (ver ServiceResourceSelectionFlow).
+                $service->resources()->attach(array_map(
+                    fn (int $key) => $resourceIds[$key],
+                    $serviceData->resourceKeys,
+                ));
 
                 $serviceIds[] = $service->id;
             }

@@ -58,7 +58,7 @@ function adminAgentFixtureOrganization(string $phoneNumberId = 'wamid-admin-agen
         channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
-        services: [new ServiceRegistrationData('Corte de cabello', 30)],
+        services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: [new ResourceRegistrationData('Carlos', array_map(
             fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '09:00', endTime: '17:00'),
             range(0, 6)

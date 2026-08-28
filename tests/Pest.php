@@ -35,6 +35,33 @@ unset($__dbDatabase);
 
 /*
 |--------------------------------------------------------------------------
+| Guarda dura: nunca correr contra un cache store compartido (Redis real)
+|--------------------------------------------------------------------------
+|
+| Incidente real (2026-08-28, Fase 2 de mensajes editables): un test que
+| editaba un BotMessage y esperaba que Cache::forget() invalidara la
+| lectura siguiente contaminó el Redis REAL de dev — mismo motivo que el
+| guard de arriba: phpunit.xml declara CACHE_STORE=array con force="true",
+| pero en la práctica el proceso siguió usando "redis" (heredado del
+| entorno real vía env_file de Docker). Síntoma: tests que ni siquiera
+| tocan bot_messages fallaban con el texto de OTRO test — Cache::remember()
+| nunca hacía miss, porque el valor mutado seguía en Redis después de que
+| la transacción de BD de ese test se revirtiera (RefreshDatabase revierte
+| la BD, nunca el cache). Mismo criterio que arriba: no depender de que esa
+| precedencia de PHPUnit funcione, verificarlo acá.
+|
+*/
+$__cacheStore = getenv('CACHE_STORE') ?: ($_ENV['CACHE_STORE'] ?? ($_SERVER['CACHE_STORE'] ?? null));
+
+if ($__cacheStore !== 'array') {
+    fwrite(STDERR, "\n\n¡ABORTADO! CACHE_STORE resolvió a \"{$__cacheStore}\", no \"array\".\n");
+    fwrite(STDERR, "Correr los tests así arriesga contaminar el cache compartido (Redis) con datos de test.\n\n");
+    exit(1);
+}
+unset($__cacheStore);
+
+/*
+|--------------------------------------------------------------------------
 | Test Case
 |--------------------------------------------------------------------------
 |
