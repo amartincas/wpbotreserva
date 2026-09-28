@@ -2,8 +2,11 @@
 
 namespace App\Jobs;
 
+use App\Application\Contracts\ChannelResolverInterface;
+use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Conversations\InboundMessageRouter;
 use App\Domain\Conversational\InboundMessage;
+use App\Models\ConversationMessage;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -71,20 +74,52 @@ class ProcessInboundConversationMessage implements ShouldQueue
         private readonly ?int $dedupHours = null,
     ) {}
 
-    public function handle(InboundMessageRouter $router): void
+    public function handle(InboundMessageRouter $router, ChannelResolverInterface $channels, ConversationSessionRepositoryInterface $sessions): void
     {
         $dedupKey = "inbound_message_processed:{$this->message->phoneNumberId}:{$this->message->messageId}";
         $dedupHours = $this->dedupHours ?? config('conversations.message_dedup_hours');
         $lockKey = "conversation:{$this->message->phoneNumberId}:{$this->message->fromPhone}";
 
-        Cache::lock($lockKey, $this->lockSeconds)->block($this->blockSeconds, function () use ($router, $dedupKey, $dedupHours) {
+        Cache::lock($lockKey, $this->lockSeconds)->block($this->blockSeconds, function () use ($router, $channels, $sessions, $dedupKey, $dedupHours) {
             if (Cache::has($dedupKey)) {
                 return;
             }
 
             $router->handle($this->message);
 
+            $this->logInboundMessage($channels, $sessions);
+
             Cache::put($dedupKey, true, now()->addHours($dedupHours));
         });
+    }
+
+    /**
+     * Post-E2E Fase 1 (Hallazgo 5): trazabilidad de observabilidad, nunca
+     * parte de la lógica de negocio — corre DESPUÉS de que el Router ya
+     * resolvió Channel/Organization/ConversationSession, así que solo lee
+     * ese estado ya resuelto (mismos resolvers, sin duplicar lógica de
+     * resolución) en vez de recalcularlo. No corre para reentregas
+     * deduplicadas (el "return" de arriba las corta antes de llegar acá) —
+     * evita filas duplicadas para el mismo message_id sin necesitar un
+     * constraint dedicado.
+     */
+    private function logInboundMessage(ChannelResolverInterface $channels, ConversationSessionRepositoryInterface $sessions): void
+    {
+        $channel = $channels->resolve($this->message->phoneNumberId);
+        $organizationId = null;
+
+        if ($channel !== null) {
+            $organizationId = $sessions->findOrCreateFor($channel, $this->message->fromPhone)->organization_id;
+        }
+
+        ConversationMessage::create([
+            'channel_id' => $channel?->id,
+            'organization_id' => $organizationId,
+            'customer_phone' => $this->message->fromPhone,
+            'direction' => 'inbound',
+            'message_id' => $this->message->messageId,
+            'body' => $this->message->text,
+            'created_at' => $this->message->receivedAt,
+        ]);
     }
 }

@@ -217,7 +217,7 @@ test('una elección que no es ninguno de los 2 botones vuelve a preguntar', func
     expect($drafts->get($session)['_awaitingAction'])->toBeTrue();
 });
 
-test('caso real (segunda ronda): con un solo recurso en el negocio, igual pregunta quién lo presta — como al crear el primer servicio', function () {
+test('post-E2E Fase 1 (Hallazgo 2, caso A): con exactamente 1 recurso en el negocio, se autoasigna sin preguntar quién lo presta ni si agrega otra persona', function () {
     $organization = gestionNegocioFixtureOrganization(resourceCount: 1);
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
@@ -228,17 +228,17 @@ test('caso real (segunda ronda): con un solo recurso en el negocio, igual pregun
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
-    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio -> autoasigna Recurso 1, salta directo a confirmar
 
+    // Nunca pregunta "quién lo presta" ni "¿agregás otra persona?" — pasa
+    // directo a la confirmación del servicio.
     expect($sent)->toHaveCount(6);
+    expect($sent[5]['message'])->not->toContain('va a prestar el servicio');
+    expect($sent[5]['message'])->not->toContain('¿Agregás otra persona');
     expect($sent[5]['message'])->toContain('Recurso 1');
-    expect($sent[5]['message'])->toContain('Agregar una persona nueva');
-    expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
-
-    $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
-    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro
-
-    expect(array_column($sent[array_key_last($sent)]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect(array_column($sent[5]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($drafts->get($session)['_awaitingServiceConfirmation'])->toBeTrue();
+    expect($drafts->get($session))->not->toHaveKey('_awaitingServiceResourceSelection');
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
 
@@ -248,7 +248,10 @@ test('caso real (segunda ronda): con un solo recurso en el negocio, igual pregun
 });
 
 test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su propio horario, tal como al registrar el negocio', function () {
-    $organization = gestionNegocioFixtureOrganization(resourceCount: 1);
+    // resourceCount: 2 a propósito (post-E2E Fase 1, Hallazgo 2) — con
+    // exactamente 1 recurso el menú "quién lo presta" ya no aparece (se
+    // autoasigna), así que la opción "0" solo es alcanzable con 2+.
+    $organization = gestionNegocioFixtureOrganization(resourceCount: 2);
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
     $sent = [];
@@ -367,9 +370,7 @@ test('Agregar servicio: si no confirma, no crea nada', function () {
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
-    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
-    $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
-    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro recurso
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio -> único recurso -> se autoasigna, pasa directo a confirmar
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no confirma
 
     expect($organization->fresh()->services()->count())->toBe(1);
@@ -426,6 +427,10 @@ test('Cambiar horario: reemplaza el horario completo del recurso elegido al conf
 
     expect($sent)->toHaveCount(5);
     expect($sent[4]['message'])->toContain('Recurso 2');
+    // Post-E2E Fase 1 (Hallazgo 3): nombre de día en español, nunca índice
+    // numérico crudo.
+    expect($sent[4]['message'])->toContain('Viernes de 14:00 a 20:00');
+    expect($sent[4]['message'])->not->toContain('día 5');
     expect(array_column($sent[4]['buttons'], 'id'))->toBe(['si', 'no']);
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);

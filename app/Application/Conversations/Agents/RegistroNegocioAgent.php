@@ -17,6 +17,7 @@ use App\Application\Conversations\Flows\FreeTextFieldExtractor;
 use App\Application\Conversations\Flows\ServicePriceFieldExtractor;
 use App\Application\Conversations\Flows\ServicePriceResult;
 use App\Application\Conversations\Flows\ServiceResourceSelectionFlow;
+use App\Application\Conversations\Flows\SpanishWeekdayNames;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
@@ -399,7 +400,11 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         $draft['_pendingServicePrice'] = $priceResult->price;
         unset($draft['_currentServiceName'], $draft['_currentServiceDuration'], $draft['_currentServiceDescription']);
 
-        $draft = $this->resourceFlow->begin($draft, fn (string $text) => $this->reply($session, $text));
+        $draft = $this->resourceFlow->begin(
+            $draft,
+            fn (string $text) => $this->reply($session, $text),
+            fn (array $draft) => $this->finishServiceResourceSelection($session, $draft),
+        );
         $this->drafts->put($session, $draft);
     }
 
@@ -550,7 +555,12 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
                 /** @var WeeklyScheduleSlot[] $schedule */
                 $schedule = $r['weeklySchedule'];
                 $scheduleText = implode(', ', array_map(
-                    fn (WeeklyScheduleSlot $slot) => "día {$slot->weekday} de {$slot->startTime} a {$slot->endTime}",
+                    fn (WeeklyScheduleSlot $slot) => sprintf(
+                        '%s de %s a %s',
+                        ucfirst(SpanishWeekdayNames::nameOf($slot->weekday) ?? "día {$slot->weekday}"),
+                        $slot->startTime,
+                        $slot->endTime,
+                    ),
                     $schedule
                 ));
 

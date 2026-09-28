@@ -257,15 +257,18 @@ test('caso real (segunda ronda): si la IA rechaza de plano el nombre del negocio
     expect($drafts->get($session)['_pendingOrganizationName'])->toBe('Impulzar');
 });
 
-test('Fase 1: recolecta varios servicios con recursos anidados por servicio (¿quién lo presta?) hasta el resumen, cada servicio con su propio recurso', function () {
+test('post-E2E Fase 1 (Hallazgo 2, caso B): con 2+ recursos existentes, el 2do servicio sigue ofreciendo selección explícita — nada de cruce cartesiano', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sent = [];
     // "Lunes de 9 a 17" y "Martes y miércoles de 10 a 18" los resuelve el
     // parser determinista de WeeklyScheduleFieldExtractor sin llamar a la
-    // IA; elegir "0" del menú de recursos tampoco llama a la IA (lo
-    // resuelve ServiceResourceSelectionFlow con una regex) — por eso no hay
-    // entradas en esta cola para esos pasos.
+    // IA; elegir del menú de recursos tampoco llama a la IA (lo resuelve
+    // ServiceResourceSelectionFlow con una regex) — por eso no hay entradas
+    // en esta cola para esos pasos. Carlos y Ana quedan cargados ambos
+    // DURANTE el primer servicio (vía "¿agregás otra persona?"), para que
+    // al llegar el 2do servicio ya existan 2 recursos y el menú de
+    // selección explícita (caso B, no autoasignación) sea el que aplica.
     $ai = registroQueuedAi([
         'Restaurante El Sabor',
         'Bogotá',
@@ -273,9 +276,9 @@ test('Fase 1: recolecta varios servicios con recursos anidados por servicio (¿q
         'Corte de cabello',
         '30',
         'Carlos',
+        'Ana',
         'Barba',
         '20',
-        'Ana',
     ]);
     $agent = buildRegistroAgent($drafts, $sent, $ai);
 
@@ -290,38 +293,57 @@ test('Fase 1: recolecta varios servicios con recursos anidados por servicio (¿q
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> sin recursos todavía -> pregunta directo quién lo presta
     $agent->handle(registroFixtureMessage('Carlos'), $session);
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
+    $agent->handle(registroFixtureMessage('sí'), $session); // agrega otra persona a Corte de cabello
+
+    // Con Carlos ya cargado (1 existente), el bucle "agregar otra persona a
+    // ESTE servicio" sigue mostrando el menú explícito — ese atajo de
+    // autoasignación es exclusivo de begin() (arranque de un servicio
+    // nuevo), nunca de este bucle.
+    expect(array_key_last($sent) >= 0)->toBeTrue();
+    $menuIndex = array_key_last($sent);
+    expect($sent[$menuIndex]['message'])->toContain('1) Carlos');
+    expect($sent[$menuIndex]['message'])->toContain('0) Agregar una persona nueva');
+
+    $agent->handle(registroFixtureMessage('0'), $session); // da de alta a Ana también para Corte de cabello
+    $agent->handle(registroFixtureMessage('Ana'), $session);
+    $agent->handle(registroFixtureMessage('Martes y miércoles de 10 a 18'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Corte de cabello -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('sí'), $session);
     $agent->handle(registroFixtureMessage('Barba'), $session);
     $agent->handle(registroFixtureMessage('20 minutos'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
-    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> Carlos ya existe -> ofrece el menú en vez de asumir que también atiende Barba
-    $agent->handle(registroFixtureMessage('0'), $session); // da de alta una persona nueva en vez de reusar a Carlos
-    $agent->handle(registroFixtureMessage('Ana'), $session);
-    $agent->handle(registroFixtureMessage('Martes y miércoles de 10 a 18'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> 2 recursos existentes (Carlos, Ana) -> caso B: menú explícito, NO autoasignación
+
+    $barbaMenuIndex = array_key_last($sent);
+    expect($sent[$barbaMenuIndex]['message'])->toContain('Quién va a prestar el servicio *Barba*');
+    expect($sent[$barbaMenuIndex]['message'])->toContain('1) Carlos');
+    expect($sent[$barbaMenuIndex]['message'])->toContain('2) Ana');
+
+    $agent->handle(registroFixtureMessage('2'), $session); // Barba la presta solo Ana, no Carlos
     $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Barba -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
 
-    expect($sent)->toHaveCount(23);
-
-    // El menú de recursos de Barba ofrece a Carlos (ya cargado para el
-    // primer servicio) en vez de asumir en silencio que también la atiende.
-    expect($sent[17]['message'])->toContain('Quién va a prestar el servicio *Barba*');
-    expect($sent[17]['message'])->toContain('1) Carlos');
-
-    $summary = $sent[22]['message'];
+    $summary = $sent[array_key_last($sent)]['message'];
     expect($summary)->toContain('Restaurante El Sabor');
     expect($summary)->toContain('Corte de cabello');
     expect($summary)->toContain('Barba');
     expect($summary)->toContain('Carlos');
     expect($summary)->toContain('Ana');
+
+    // Post-E2E Fase 1 (Hallazgo 3): nombres de día en español, nunca
+    // índices numéricos crudos.
+    expect($summary)->toContain('Lunes de 09:00 a 17:00');
+    expect($summary)->toContain('Martes de 10:00 a 18:00');
+    expect($summary)->toContain('Miércoles de 10:00 a 18:00');
+    expect($summary)->not->toContain('día 1');
+    expect($summary)->not->toContain('día 2');
     expect($drafts->get($session)['_awaiting_confirmation'])->toBeTrue();
     expect($drafts->get($session)['services'])->toHaveCount(2);
     expect($drafts->get($session)['resources'])->toHaveCount(2);
 
-    // Cada servicio quedó con SU recurso, no con los dos — nada de cruce
-    // cartesiano implícito.
-    expect($drafts->get($session)['services'][0]['resourceKeys'])->toBe([0]); // Corte de cabello -> Carlos
+    // Corte de cabello: Carlos Y Ana (ambos elegidos explícitamente). Barba:
+    // solo Ana — nada de cruce cartesiano implícito.
+    expect($drafts->get($session)['services'][0]['resourceKeys'])->toBe([0, 1]); // Corte de cabello -> Carlos, Ana
     expect($drafts->get($session)['services'][1]['resourceKeys'])->toBe([1]); // Barba -> Ana
 
     expect(Organization::count())->toBe(0); // todavía no se confirmó
@@ -335,20 +357,15 @@ test('Fase 1: recolecta varios servicios con recursos anidados por servicio (¿q
     $carlos = $org->resources->firstWhere('display_name', 'Carlos');
     $ana = $org->resources->firstWhere('display_name', 'Ana');
 
-    // Cada recurso conserva su propio horario.
-    expect($carlos->schedules)->toHaveCount(1);
-    expect($ana->schedules)->toHaveCount(2);
-
     $corte = $org->services->firstWhere('name', 'Corte de cabello');
     $barba = $org->services->firstWhere('name', 'Barba');
 
-    // Sin cruce cartesiano: Corte de cabello es solo de Carlos, Barba solo
-    // de Ana.
-    expect($corte->resources->pluck('id')->all())->toBe([$carlos->id]);
+    expect($corte->resources->pluck('id')->sort()->values()->all())
+        ->toBe(collect([$carlos->id, $ana->id])->sort()->values()->all());
     expect($barba->resources->pluck('id')->all())->toBe([$ana->id]);
 });
 
-test('Fase 1: un recurso ya cargado en un servicio anterior puede elegirse para otro servicio (un recurso puede prestar varios servicios)', function () {
+test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio anterior se autoasigna al siguiente sin preguntar (un recurso puede prestar varios servicios)', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sent = [];
@@ -380,10 +397,18 @@ test('Fase 1: un recurso ya cargado en un servicio anterior puede elegirse para 
     $agent->handle(registroFixtureMessage('Corte + Barba'), $session);
     $agent->handle(registroFixtureMessage('45 minutos'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
-    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> ofrece el menú -> elige "1" (Carlos), no da de alta a nadie
-    $agent->handle(registroFixtureMessage('1'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session); // termina recursos -> ¿agregás otro servicio?
-    $agent->handle(registroFixtureMessage('no'), $session); // confirmación
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> Carlos es el único recurso -> se autoasigna sin preguntar (Hallazgo 2, caso A)
+
+    // "va a prestar el servicio" nunca aparece — ni para el 1er servicio
+    // (0 recursos, pide directo el nombre) ni para el 2do (autoasigna).
+    // "¿Agregás otra persona?" aparece UNA sola vez — la del 1er servicio
+    // (legítima, recién se dio de alta a Carlos, corresponde preguntar si
+    // hay alguien más) — nunca una segunda vez para el 2do servicio, que es
+    // justamente lo que el Hallazgo 2 elimina.
+    expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, 'va a prestar el servicio')))->toHaveCount(0);
+    expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, '¿Agregás otra persona')))->toHaveCount(1);
+
+    $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
     $agent->handle(registroFixtureMessage('sí'), $session);
 
     $org = Organization::firstOrFail();
@@ -562,4 +587,61 @@ test('Fase 3: el saludo se manda en burbuja aparte antes de la primera pregunta,
 
     // No se repite en mensajes siguientes de la misma conversación.
     expect(collect($sent)->pluck('message')->filter(fn ($m) => $m === '¡Hola! Soy el asistente de WpbotReserva.'))->toHaveCount(1);
+});
+
+test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada uno con una respuesta de precio distinta, sin contaminación entre sí', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $ai = registroQueuedAi([
+        'Spa Bienestar',
+        'Cali',
+        'Carrera 10 #20-30',
+        'Masaje',
+        '45',
+        'Laura',
+        'Consulta',
+        '30',
+    ]);
+    $agent = buildRegistroAgent($drafts, $sent, $ai);
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Spa Bienestar'), $session);
+    $agent->handle(registroFixtureMessage('Cali'), $session);
+    $agent->handle(registroFixtureMessage('Carrera 10 #20-30'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
+    $agent->handle(registroFixtureMessage('Masaje'), $session);
+    $agent->handle(registroFixtureMessage('45 minutos'), $session);
+    $agent->handle(registroFixtureMessage('Relajante'), $session); // descripción del servicio 1
+    $agent->handle(registroFixtureMessage('45000'), $session); // precio NUMÉRICO del servicio 1
+    $agent->handle(registroFixtureMessage('Laura'), $session); // único recurso -> 0 existentes, pide nombre
+    $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Masaje -> ¿agregás otro servicio?
+    $agent->handle(registroFixtureMessage('sí'), $session);
+    $agent->handle(registroFixtureMessage('Consulta'), $session);
+    $agent->handle(registroFixtureMessage('30 minutos'), $session);
+    $agent->handle(registroFixtureMessage('depende de la valoración'), $session); // descripción del servicio 2 (también hace de condición de precio)
+    $agent->handle(registroFixtureMessage('no'), $session); // precio del servicio 2: rechazo explícito, NUNCA numérico -> Laura es la única existente, se autoasigna
+    $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    $org = Organization::firstOrFail();
+    $masaje = $org->services->firstWhere('name', 'Masaje');
+    $consulta = $org->services->firstWhere('name', 'Consulta');
+
+    // Servicio 1: precio numérico real, descripción SIN contaminar con nada del servicio 2.
+    expect((float) $masaje->price)->toBe(45000.0);
+    expect($masaje->description)->toBe('Relajante');
+
+    // Servicio 2: precio NULL (nunca inventado, nunca heredado del
+    // servicio 1), descripción intacta — el "no" del precio no dejó
+    // ningún texto de condición anexado porque fue un rechazo, no una
+    // condición.
+    expect($consulta->price)->toBeNull();
+    expect($consulta->description)->toBe('depende de la valoración');
+
+    // Ambos comparten el único recurso (autoasignado), pero eso no afecta
+    // ni mezcla sus precios/descripciones individuales.
+    expect($masaje->resources->pluck('display_name')->all())->toBe(['Laura']);
+    expect($consulta->resources->pluck('display_name')->all())->toBe(['Laura']);
 });

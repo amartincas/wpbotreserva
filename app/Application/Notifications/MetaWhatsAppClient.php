@@ -5,6 +5,7 @@ namespace App\Application\Notifications;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Exceptions\NotificationDeliveryException;
 use App\Domain\Tenancy\Channel;
+use App\Models\ConversationMessage;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -12,6 +13,16 @@ use Illuminate\Support\Facades\Http;
  * Channel::credentials le corresponden a este proveedor (access_token) —
  * esa es justamente la responsabilidad que ChannelClientInterface delega en
  * cada implementación concreta, no en quien la invoca.
+ *
+ * Post-E2E Fase 1 (Hallazgo 5): al ser el único punto de salida real hacia
+ * Meta (los 7 Agents y WhatsAppNotificationSender convergen acá), es
+ * también el único lugar donde hace falta registrar mensajes salientes en
+ * conversation_messages — sin tocar ningún Agent individualmente. Nunca se
+ * completa organization_id acá: ChannelClientInterface solo recibe Channel,
+ * y un Channel puede estar vinculado a más de una Organization (N:N real,
+ * confirmado en datos de staging) — intentar adivinar cuál sería
+ * exactamente el tipo de atribución incorrecta que esta misma tabla busca
+ * evitar, así que queda NULL a propósito en todas las filas outbound.
  */
 class MetaWhatsAppClient implements ChannelClientInterface
 {
@@ -99,5 +110,34 @@ class MetaWhatsAppClient implements ChannelClientInterface
                 "Meta API respondió {$response->status()} al notificar a {$to}: {$response->body()}"
             );
         }
+
+        ConversationMessage::create([
+            'channel_id' => $channel->id,
+            'organization_id' => null,
+            'customer_phone' => $to,
+            'direction' => 'outbound',
+            'message_id' => $response->json('messages.0.id'),
+            'body' => $this->describeOutboundBody($payload),
+            'created_at' => now(),
+        ]);
+    }
+
+    /**
+     * Reconstruye un texto de auditoría legible a partir del payload real
+     * enviado a Meta — nunca credenciales, tokens ni headers, solo el
+     * contenido conversacional (Hallazgo 5, sección "privacidad").
+     */
+    private function describeOutboundBody(array $payload): string
+    {
+        return match ($payload['type'] ?? null) {
+            'text' => $payload['text']['body'] ?? '',
+            'template' => sprintf(
+                '[plantilla: %s] %s',
+                $payload['template']['name'] ?? '',
+                implode(', ', array_column($payload['template']['components'][0]['parameters'] ?? [], 'text')),
+            ),
+            'interactive' => $payload['interactive']['body']['text'] ?? '',
+            default => '',
+        };
     }
 }

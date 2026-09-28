@@ -61,15 +61,32 @@ final class ServiceResourceSelectionFlow
      * nombre ya está en $draft['_pendingServiceName'] — el llamante lo deja
      * ahí antes de invocar begin().
      *
+     * Post-E2E Fase 1 (Hallazgo 2): con exactamente 1 recurso existente no
+     * tiene sentido preguntar "¿quién lo presta?" — solo hay una respuesta
+     * posible. Se asigna directo y se invoca $onDone en el mismo turno, sin
+     * esperar un mensaje más. Con 0 o 2+ recursos, comportamiento idéntico
+     * al anterior (promptSelection decide). Este atajo NO aplica al bucle
+     * "¿agregás otra persona?" (handleAddAnotherServiceResource) — ese es
+     * un pedido explícito del dueño de agregar OTRA persona al mismo
+     * servicio, no la pregunta inicial de "quién lo presta".
+     *
      * @param  array<string, mixed>  $draft
      * @param  Closure(string): void  $reply
+     * @param  Closure(array<string, mixed>): array<string, mixed>  $onDone
      * @return array<string, mixed>
      */
-    public function begin(array $draft, Closure $reply): array
+    public function begin(array $draft, Closure $reply, Closure $onDone): array
     {
         $draft['_pendingServiceResourceIds'] = [];
+        $existing = $this->catalog->listExisting($draft);
 
-        return $this->promptSelection($draft, $reply);
+        if (count($existing) === 1) {
+            $draft['_pendingServiceResourceIds'] = [$existing[0]['id']];
+
+            return $onDone($draft);
+        }
+
+        return $this->promptSelection($draft, $reply, $existing);
     }
 
     /**
@@ -97,12 +114,17 @@ final class ServiceResourceSelectionFlow
     }
 
     /**
+     * $existing ya calculado se lo pasa begin() (evita una segunda consulta
+     * al catálogo, relevante para PersistedResourceCatalog); si no viene
+     * (llamado desde handleAddAnotherServiceResource), se calcula acá.
+     *
      * @param  array<string, mixed>  $draft
+     * @param  array<int, array{id: int|string, name: string}>|null  $existing
      * @return array<string, mixed>
      */
-    private function promptSelection(array $draft, Closure $reply): array
+    private function promptSelection(array $draft, Closure $reply, ?array $existing = null): array
     {
-        $existing = $this->catalog->listExisting($draft);
+        $existing ??= $this->catalog->listExisting($draft);
 
         if ($existing === []) {
             $draft['_awaitingNewResourceName'] = true;

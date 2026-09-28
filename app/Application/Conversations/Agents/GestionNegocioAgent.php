@@ -13,6 +13,7 @@ use App\Application\Conversations\Flows\PersistedResourceCatalog;
 use App\Application\Conversations\Flows\ServicePriceFieldExtractor;
 use App\Application\Conversations\Flows\ServicePriceResult;
 use App\Application\Conversations\Flows\ServiceResourceSelectionFlow;
+use App\Application\Conversations\Flows\SpanishWeekdayNames;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
 use App\Application\Tenancy\AddResourceCommand;
 use App\Application\Tenancy\AddServiceCommand;
@@ -349,6 +350,7 @@ class GestionNegocioAgent implements AgentInterface
         $draft = $this->resourceFlow($organization)->begin(
             $draft,
             fn (string $text) => $this->reply($organization, $message->fromPhone, $text),
+            fn (array $draft) => $this->beginServiceConfirmationDraft($session, $organization, $message->fromPhone, $draft),
         );
         $this->drafts->put($session, $draft);
     }
@@ -583,7 +585,12 @@ class GestionNegocioAgent implements AgentInterface
     private function formatSchedule(array $schedule): string
     {
         return implode(', ', array_map(
-            fn (WeeklyScheduleSlot $slot) => "día {$slot->weekday} de {$slot->startTime} a {$slot->endTime}",
+            fn (WeeklyScheduleSlot $slot) => sprintf(
+                '%s de %s a %s',
+                ucfirst(SpanishWeekdayNames::nameOf($slot->weekday) ?? "día {$slot->weekday}"),
+                $slot->startTime,
+                $slot->endTime,
+            ),
             $schedule
         ));
     }

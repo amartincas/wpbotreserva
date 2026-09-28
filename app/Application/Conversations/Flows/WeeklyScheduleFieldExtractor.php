@@ -275,24 +275,45 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
     }
 
     /**
+     * Post-E2E Fase 1 (Hallazgo 4): agrega sufijos "am"/"pm" opcionales
+     * (con o sin espacio, ej. "8am"/"8 am") a cada extremo, sin tocar el
+     * resto de la gramática. El texto ya llega en minúsculas desde
+     * tryDeterministicParse(), por eso no hace falta /i acá.
+     *
      * @return array{0: string, 1: string}|null
      */
     private function parseSingleHourRange(string $token): ?array
     {
-        if (! preg_match('/^(\d{1,2})(?::([0-5]\d))?\s*a\s*(\d{1,2})(?::([0-5]\d))?$/u', $token, $matches)) {
+        if (! preg_match('/^(\d{1,2})(?::([0-5]\d))?\s*(am|pm)?\s*a\s*(\d{1,2})(?::([0-5]\d))?\s*(am|pm)?$/u', $token, $matches)) {
             return null;
         }
 
         $startHour = (int) $matches[1];
         $startMinute = isset($matches[2]) && $matches[2] !== '' ? (int) $matches[2] : 0;
-        $endHour = (int) $matches[3];
-        $endMinute = isset($matches[4]) && $matches[4] !== '' ? (int) $matches[4] : 0;
+        $startSuffix = $matches[3] ?? '';
+        $endHour = (int) $matches[4];
+        $endMinute = isset($matches[5]) && $matches[5] !== '' ? (int) $matches[5] : 0;
+        $endSuffix = $matches[6] ?? '';
 
         if ($startHour > 23 || $endHour > 23) {
             return null;
         }
 
-        $resolved = $this->resolveHourPair($startHour, $endHour);
+        // Un sufijo am/pm junto a una hora que ya pasa de 12 es un formato
+        // inconsistente ("13pm") — no se adivina, se descarta.
+        if (($startSuffix !== '' || $endSuffix !== '') && ($startHour > 12 || $endHour > 12)) {
+            return null;
+        }
+
+        $resolved = match (true) {
+            $startSuffix !== '' && $endSuffix !== '' => $this->resolveExplicitSuffixes($startHour, $startSuffix, $endHour, $endSuffix),
+            // Ninguno de los dos tiene sufijo — ruta existente, sin tocar.
+            $startSuffix === '' && $endSuffix === '' => $this->resolveHourPair($startHour, $endHour),
+            // Un solo lado con sufijo ("8am a 12"): genuinamente ambiguo —
+            // no se interpreta el "12" suelto como 12pm por su cuenta,
+            // se cae al fallback de IA en vez de adivinar.
+            default => null,
+        };
 
         if ($resolved === null) {
             return null;
@@ -304,6 +325,33 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
             sprintf('%02d:%02d', $resolvedStart, $startMinute),
             sprintf('%02d:%02d', $resolvedEnd, $endMinute),
         ];
+    }
+
+    /**
+     * Resolución explícita cuando AMBOS extremos traen sufijo am/pm — sin
+     * heurística, conversión directa de reloj de 12h a 24h.
+     *
+     * @return array{0: int, 1: int}|null
+     */
+    private function resolveExplicitSuffixes(int $startHour, string $startSuffix, int $endHour, string $endSuffix): ?array
+    {
+        $resolvedStart = $this->to24Hour($startHour, $startSuffix);
+        $resolvedEnd = $this->to24Hour($endHour, $endSuffix);
+
+        return $resolvedEnd > $resolvedStart ? [$resolvedStart, $resolvedEnd] : null;
+    }
+
+    /**
+     * Reloj de 12h → 24h: 12am es medianoche (0), 12pm es mediodía (12, no
+     * 24) — la excepción clásica que rompe un "+12 a pm" ingenuo.
+     */
+    private function to24Hour(int $hour, string $suffix): int
+    {
+        return match (true) {
+            $suffix === 'am' && $hour === 12 => 0,
+            $suffix === 'pm' && $hour !== 12 => $hour + 12,
+            default => $hour,
+        };
     }
 
     /**
