@@ -10,6 +10,7 @@ use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\Flows\AiFieldExtractor;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Conversations\Flows\DraftResourceCatalog;
+use App\Application\Conversations\Flows\DurationFieldExtractor;
 use App\Application\Conversations\Flows\FlowProgress;
 use App\Application\Conversations\Flows\FlowProgressStatus;
 use App\Application\Conversations\Flows\FlowStep;
@@ -76,7 +77,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
     private readonly AiFieldExtractor $serviceNameExtractor;
 
-    private readonly AiFieldExtractor $serviceDurationExtractor;
+    private readonly DurationFieldExtractor $serviceDurationExtractor;
 
     private readonly FreeTextFieldExtractor $freeTextExtractor;
 
@@ -124,7 +125,9 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         ];
 
         $this->serviceNameExtractor = new AiFieldExtractor($ai, 'nombre del servicio', 'Un servicio que ofrece el negocio.', $botMessages);
-        $this->serviceDurationExtractor = new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages);
+        $this->serviceDurationExtractor = new DurationFieldExtractor(
+            new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages)
+        );
         $this->freeTextExtractor = new FreeTextFieldExtractor;
         $this->servicePriceExtractor = new ServicePriceFieldExtractor;
 

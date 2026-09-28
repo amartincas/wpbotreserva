@@ -8,6 +8,7 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\Flows\AiFieldExtractor;
+use App\Application\Conversations\Flows\DurationFieldExtractor;
 use App\Application\Conversations\Flows\FreeTextFieldExtractor;
 use App\Application\Conversations\Flows\PersistedResourceCatalog;
 use App\Application\Conversations\Flows\ServicePriceFieldExtractor;
@@ -84,7 +85,7 @@ class GestionNegocioAgent implements AgentInterface
 
     private readonly AiFieldExtractor $serviceNameExtractor;
 
-    private readonly AiFieldExtractor $serviceDurationExtractor;
+    private readonly DurationFieldExtractor $serviceDurationExtractor;
 
     private readonly AiFieldExtractor $resourceNameExtractor;
 
@@ -105,7 +106,9 @@ class GestionNegocioAgent implements AgentInterface
         AiServiceInterface $ai,
     ) {
         $this->serviceNameExtractor = new AiFieldExtractor($ai, 'nombre del servicio', 'Un servicio nuevo que va a ofrecer el negocio.', $botMessages);
-        $this->serviceDurationExtractor = new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages);
+        $this->serviceDurationExtractor = new DurationFieldExtractor(
+            new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages)
+        );
         $this->resourceNameExtractor = new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.', $botMessages);
         $this->weeklyScheduleExtractor = new WeeklyScheduleFieldExtractor($ai, $botMessages);
         $this->freeTextExtractor = new FreeTextFieldExtractor;

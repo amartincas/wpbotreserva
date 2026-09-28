@@ -103,7 +103,7 @@ final class ServiceResourceSelectionFlow
         }
 
         if (($draft['_awaitingNewResourceSchedule'] ?? false) === true) {
-            return $this->handleNewResourceSchedule($message, $draft, $reply, $replyYesNo);
+            return $this->handleNewResourceSchedule($message, $draft, $reply, $replyYesNo, $onDone);
         }
 
         if (($draft['_awaitingNewResourceName'] ?? false) === true) {
@@ -199,10 +199,18 @@ final class ServiceResourceSelectionFlow
     }
 
     /**
+     * Post-E2E Fase 1 (Hallazgo 1, segunda ronda): mismo criterio que
+     * begin() pero para el momento en que se ACABA de crear el primer
+     * recurso del negocio (transición 0→1) — antes solo se cubría "ya
+     * existía exactamente 1 al entrar", nunca "recién quedó en 1 tras
+     * crearlo". Con 2+ recursos (ej. se eligió "0" desde un menú que ya
+     * tenía opciones), el comportamiento de preguntar sigue intacto.
+     *
      * @param  array<string, mixed>  $draft
+     * @param  Closure(array<string, mixed>): array<string, mixed>  $onDone
      * @return array<string, mixed>
      */
-    private function handleNewResourceSchedule(InboundMessage $message, array $draft, Closure $reply, Closure $replyYesNo): array
+    private function handleNewResourceSchedule(InboundMessage $message, array $draft, Closure $reply, Closure $replyYesNo, Closure $onDone): array
     {
         $result = $this->weeklyScheduleExtractor->extract($message->text, $draft);
 
@@ -216,6 +224,11 @@ final class ServiceResourceSelectionFlow
 
         $draft['_pendingServiceResourceIds'] = array_values(array_unique([...$draft['_pendingServiceResourceIds'], $resourceId]));
         unset($draft['_awaitingNewResourceSchedule'], $draft['_pendingNewResourceName']);
+
+        if (count($this->catalog->listExisting($draft)) === 1) {
+            return $onDone($draft);
+        }
+
         $draft['_awaitingAddAnotherServiceResource'] = true;
         $replyYesNo($this->botMessages?->render('recurso.otra_persona') ?? '¿Agregás otra persona o recurso para este servicio?');
 

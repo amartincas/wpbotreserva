@@ -222,11 +222,13 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): con exactamente 1 recurso en el nego
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
     $sent = [];
-    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
+    // '20' ya no va en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba']));
 
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization); // determinista, no consume la cola de IA
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio -> autoasigna Recurso 1, salta directo a confirmar
 
@@ -258,11 +260,13 @@ test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su 
     $newScheduleJson = json_encode([
         ['weekday' => 2, 'start_time' => '10:00', 'end_time' => '18:00'],
     ]);
-    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Masaje moldeador', '45', 'Edgar Torres', $newScheduleJson]));
+    // '45' ya no va en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Masaje moldeador', 'Edgar Torres', $newScheduleJson]));
 
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Masaje moldeador'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('45 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('45 minutos'), $session, $organization); // determinista, no consume la cola de IA
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
     $agent->handle(gestionNegocioFixtureMessage('0'), $session, $organization); // "Agregar una persona nueva"
@@ -296,12 +300,14 @@ test('caso real: Agregar servicio con varios recursos en el negocio pregunta qui
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
     $sent = [];
-    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
+    // '20' ya no va en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba']));
 
     $agent->handle(gestionNegocioFixtureMessage('hola'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('agregar_servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization); // determinista, no consume la cola de IA
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
 
@@ -341,11 +347,13 @@ test('Agregar servicio: se puede elegir más de un recurso repitiendo "sí" en "
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
     $sent = [];
-    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
+    // '20' ya no va en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba']));
 
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization); // determinista, no consume la cola de IA
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // Recurso 1
@@ -364,11 +372,13 @@ test('Agregar servicio: si no confirma, no crea nada', function () {
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
     $sent = [];
-    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba', '20']));
+    // '20' ya no va en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Barba']));
 
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
-    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization); // determinista, no consume la cola de IA
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio -> único recurso -> se autoasigna, pasa directo a confirmar
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no confirma

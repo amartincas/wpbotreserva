@@ -260,57 +260,41 @@ test('caso real (segunda ronda): si la IA rechaza de plano el nombre del negocio
 test('post-E2E Fase 1 (Hallazgo 2, caso B): con 2+ recursos existentes, el 2do servicio sigue ofreciendo selección explícita — nada de cruce cartesiano', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
-    $sent = [];
-    // "Lunes de 9 a 17" y "Martes y miércoles de 10 a 18" los resuelve el
-    // parser determinista de WeeklyScheduleFieldExtractor sin llamar a la
-    // IA; elegir del menú de recursos tampoco llama a la IA (lo resuelve
-    // ServiceResourceSelectionFlow con una regex) — por eso no hay entradas
-    // en esta cola para esos pasos. Carlos y Ana quedan cargados ambos
-    // DURANTE el primer servicio (vía "¿agregás otra persona?"), para que
-    // al llegar el 2do servicio ya existan 2 recursos y el menú de
-    // selección explícita (caso B, no autoasignación) sea el que aplica.
-    $ai = registroQueuedAi([
-        'Restaurante El Sabor',
-        'Bogotá',
-        'Calle 15 #20-10',
-        'Corte de cabello',
-        '30',
-        'Carlos',
-        'Ana',
-        'Barba',
-        '20',
+
+    // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): con la autoasignación
+    // también aplicada a la transición 0→1 (no solo a begin() con 1 ya
+    // existente), ya NO hay forma de llegar a 2+ recursos a través de la
+    // conversación normal de RegistroNegocioAgent — el primer servicio
+    // nunca vuelve a preguntar "¿agregás otra persona?" una vez creado el
+    // único recurso. Se siembra el draft directamente (mismo patrón que
+    // "si los 3 campos fijos ya están respondidos..." en este archivo) para
+    // seguir verificando que ServiceResourceSelectionFlow, cuando SÍ hay
+    // 2+ recursos en el catálogo (sin importar cómo llegaron ahí — ver
+    // riesgo documentado en el informe), sigue ofreciendo selección
+    // explícita en vez de autoasignar.
+    $drafts->put($session, [
+        '_started' => true,
+        'organizationName' => 'Restaurante El Sabor',
+        'city' => 'Bogotá',
+        'address' => 'Calle 15 #20-10',
+        'organizationDescription' => null,
+        '_collectingServices' => true,
+        'resources' => [
+            ['name' => 'Carlos', 'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')]],
+            ['name' => 'Ana', 'weeklySchedule' => [new WeeklyScheduleSlot(2, '10:00', '18:00'), new WeeklyScheduleSlot(3, '10:00', '18:00')]],
+        ],
+        'services' => [
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'description' => null, 'price' => null, 'resourceKeys' => [0, 1]],
+        ],
+        '_awaitingAddAnotherService' => true,
     ]);
+    $sent = [];
+    $ai = registroQueuedAi(['Barba']);
     $agent = buildRegistroAgent($drafts, $sent, $ai);
 
-    $agent->handle(registroFixtureMessage('hola'), $session); // dispara el flujo
-    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
-    $agent->handle(registroFixtureMessage('Bogotá'), $session);
-    $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session); // completa los 3 fijos -> pregunta descripción del negocio
-    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción -> completa los 4 fijos -> arranca servicios
-    $agent->handle(registroFixtureMessage('Corte de cabello'), $session);
-    $agent->handle(registroFixtureMessage('30 minutos'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
-    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> sin recursos todavía -> pregunta directo quién lo presta
-    $agent->handle(registroFixtureMessage('Carlos'), $session);
-    $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
-    $agent->handle(registroFixtureMessage('sí'), $session); // agrega otra persona a Corte de cabello
-
-    // Con Carlos ya cargado (1 existente), el bucle "agregar otra persona a
-    // ESTE servicio" sigue mostrando el menú explícito — ese atajo de
-    // autoasignación es exclusivo de begin() (arranque de un servicio
-    // nuevo), nunca de este bucle.
-    expect(array_key_last($sent) >= 0)->toBeTrue();
-    $menuIndex = array_key_last($sent);
-    expect($sent[$menuIndex]['message'])->toContain('1) Carlos');
-    expect($sent[$menuIndex]['message'])->toContain('0) Agregar una persona nueva');
-
-    $agent->handle(registroFixtureMessage('0'), $session); // da de alta a Ana también para Corte de cabello
-    $agent->handle(registroFixtureMessage('Ana'), $session);
-    $agent->handle(registroFixtureMessage('Martes y miércoles de 10 a 18'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Corte de cabello -> ¿agregás otro servicio?
-    $agent->handle(registroFixtureMessage('sí'), $session);
+    $agent->handle(registroFixtureMessage('sí'), $session); // agrega otro servicio
     $agent->handle(registroFixtureMessage('Barba'), $session);
-    $agent->handle(registroFixtureMessage('20 minutos'), $session);
+    $agent->handle(registroFixtureMessage('20 minutos'), $session); // determinista, no consume la cola de IA
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> 2 recursos existentes (Carlos, Ana) -> caso B: menú explícito, NO autoasignación
 
@@ -320,6 +304,12 @@ test('post-E2E Fase 1 (Hallazgo 2, caso B): con 2+ recursos existentes, el 2do s
     expect($sent[$barbaMenuIndex]['message'])->toContain('2) Ana');
 
     $agent->handle(registroFixtureMessage('2'), $session); // Barba la presta solo Ana, no Carlos
+
+    // handleServiceResourceSelection() (selección desde un menú real) no lo
+    // toca ni Hallazgo 1 ni Hallazgo 2 — sigue preguntando "¿agregás otra
+    // persona?" tras una elección explícita.
+    expect($sent[array_key_last($sent)]['message'])->toContain('¿Agregás otra persona');
+
     $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Barba -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
 
@@ -369,15 +359,15 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sent = [];
+    // '30'/'45' ya no van en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
     $ai = registroQueuedAi([
         'Restaurante El Sabor',
         'Bogotá',
         'Calle 15 #20-10',
         'Corte de cabello',
-        '30',
         'Carlos',
         'Corte + Barba',
-        '45',
     ]);
     $agent = buildRegistroAgent($drafts, $sent, $ai);
 
@@ -387,26 +377,27 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
     $agent->handle(registroFixtureMessage('Corte de cabello'), $session);
-    $agent->handle(registroFixtureMessage('30 minutos'), $session);
+    $agent->handle(registroFixtureMessage('30 minutos'), $session); // determinista, no consume la cola de IA
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio
     $agent->handle(registroFixtureMessage('Carlos'), $session);
+    // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): tras crear a Carlos (el
+    // único recurso), el draft queda con exactamente 1 -> autoasigna y pasa
+    // directo a "¿agregás otro servicio?", sin preguntar "¿agregás otra
+    // persona?" -> ya no hace falta responder esa pregunta acá.
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session);
     $agent->handle(registroFixtureMessage('sí'), $session);
     $agent->handle(registroFixtureMessage('Corte + Barba'), $session);
-    $agent->handle(registroFixtureMessage('45 minutos'), $session);
+    $agent->handle(registroFixtureMessage('45 minutos'), $session); // determinista, no consume la cola de IA
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> Carlos es el único recurso -> se autoasigna sin preguntar (Hallazgo 2, caso A)
 
-    // "va a prestar el servicio" nunca aparece — ni para el 1er servicio
-    // (0 recursos, pide directo el nombre) ni para el 2do (autoasigna).
-    // "¿Agregás otra persona?" aparece UNA sola vez — la del 1er servicio
-    // (legítima, recién se dio de alta a Carlos, corresponde preguntar si
-    // hay alguien más) — nunca una segunda vez para el 2do servicio, que es
-    // justamente lo que el Hallazgo 2 elimina.
+    // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): "va a prestar el
+    // servicio" y "¿Agregás otra persona?" NUNCA aparecen — ni para el 1er
+    // servicio (0→1, autoasignación en la creación) ni para el 2do (1
+    // existente, autoasignación en begin()).
     expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, 'va a prestar el servicio')))->toHaveCount(0);
-    expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, '¿Agregás otra persona')))->toHaveCount(1);
+    expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, '¿Agregás otra persona')))->toHaveCount(0);
 
     $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
     $agent->handle(registroFixtureMessage('sí'), $session);
@@ -422,6 +413,41 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     foreach ($org->services as $service) {
         expect($service->resources->pluck('id')->all())->toBe([$carlos->id]);
     }
+});
+
+test('post-E2E Fase 1 (Hallazgo 1, segunda ronda): negocio nuevo, primer servicio — tras crear el único recurso pasa directo a "¿agregás otro servicio?"', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $ai = registroQueuedAi([
+        'Spa Lucía',
+        'Cali',
+        'Carrera 10 #20-30',
+        'Masaje relajante',
+        'Laura',
+    ]);
+    $agent = buildRegistroAgent($drafts, $sent, $ai);
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Spa Lucía'), $session);
+    $agent->handle(registroFixtureMessage('Cali'), $session);
+    $agent->handle(registroFixtureMessage('Carrera 10 #20-30'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
+    $agent->handle(registroFixtureMessage('Masaje relajante'), $session);
+    $agent->handle(registroFixtureMessage('45 minutos'), $session); // determinista, no consume la cola de IA
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> 0 recursos -> pide directo el nombre
+    $agent->handle(registroFixtureMessage('Laura'), $session);
+    $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session); // Laura queda como el único recurso -> autoasignación inmediata
+
+    // La pregunta "¿Agregás otra persona o recurso para este servicio?"
+    // NUNCA aparece — se pasa directo a "¿agregás otro servicio?".
+    expect($sent)->not->toBeEmpty();
+    $lastMessage = $sent[array_key_last($sent)]['message'];
+    expect($lastMessage)->not->toContain('¿Agregás otra persona');
+    expect($lastMessage)->toBe('¿Agregás otro servicio?');
+    expect($drafts->get($session))->not->toHaveKey('_awaitingAddAnotherServiceResource');
+    expect($drafts->get($session)['_awaitingAddAnotherService'])->toBeTrue();
 });
 
 test('una respuesta que no es ni sí ni no en "¿agregás otro servicio?" vuelve a preguntar, sin avanzar de fase', function () {
@@ -593,15 +619,15 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sent = [];
+    // '45'/'30' ya no van en la cola: la duración numérica desnuda ahora es
+    // determinista (DurationFieldExtractor), no consume la IA.
     $ai = registroQueuedAi([
         'Spa Bienestar',
         'Cali',
         'Carrera 10 #20-30',
         'Masaje',
-        '45',
         'Laura',
         'Consulta',
-        '30',
     ]);
     $agent = buildRegistroAgent($drafts, $sent, $ai);
 
@@ -611,15 +637,18 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     $agent->handle(registroFixtureMessage('Carrera 10 #20-30'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
     $agent->handle(registroFixtureMessage('Masaje'), $session);
-    $agent->handle(registroFixtureMessage('45 minutos'), $session);
+    $agent->handle(registroFixtureMessage('45 minutos'), $session); // determinista, no consume la cola de IA
     $agent->handle(registroFixtureMessage('Relajante'), $session); // descripción del servicio 1
     $agent->handle(registroFixtureMessage('45000'), $session); // precio NUMÉRICO del servicio 1
     $agent->handle(registroFixtureMessage('Laura'), $session); // único recurso -> 0 existentes, pide nombre
+    // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): tras crear a Laura (el
+    // único recurso), autoasigna y pasa directo a "¿agregás otro
+    // servicio?" — ya no pregunta "¿agregás otra persona?", así que no
+    // hace falta responder "no" a esa pregunta acá.
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Masaje -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('sí'), $session);
     $agent->handle(registroFixtureMessage('Consulta'), $session);
-    $agent->handle(registroFixtureMessage('30 minutos'), $session);
+    $agent->handle(registroFixtureMessage('30 minutos'), $session); // determinista, no consume la cola de IA
     $agent->handle(registroFixtureMessage('depende de la valoración'), $session); // descripción del servicio 2 (también hace de condición de precio)
     $agent->handle(registroFixtureMessage('no'), $session); // precio del servicio 2: rechazo explícito, NUNCA numérico -> Laura es la única existente, se autoasigna
     $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
