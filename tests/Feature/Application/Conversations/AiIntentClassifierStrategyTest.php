@@ -86,6 +86,14 @@ test('clasifica gestion_reserva a partir de la respuesta de la IA', function () 
     expect($intent)->toBe(Intent::GestionReserva);
 });
 
+test('clasifica info_negocio a partir de la respuesta de la IA (Fase 1)', function () {
+    $strategy = new AiIntentClassifierStrategy(aiClassifierFakeService('info_negocio'));
+
+    $intent = $strategy->attempt(aiClassifierFixtureMessage('¿cuánto cuesta el corte?'), aiClassifierFixtureSession());
+
+    expect($intent)->toBe(Intent::InfoNegocio);
+});
+
 test('normaliza mayúsculas y espacios de la respuesta de la IA', function () {
     $strategy = new AiIntentClassifierStrategy(aiClassifierFakeService('  RESERVA  '));
 

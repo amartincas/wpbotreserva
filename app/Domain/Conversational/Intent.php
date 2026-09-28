@@ -31,6 +31,13 @@ namespace App\Domain\Conversational;
  * ("agregar servicio", "cambiar horario", etc.), nunca la IA: mismo
  * criterio que AdminCommand, es una acción sensible de un único dueño, no
  * algo que valga arriesgar a una clasificación ambigua.
+ *
+ * InfoNegocio (Fase 1, información general del negocio): preguntas abiertas
+ * sobre el negocio (qué hace, dónde queda, cuánto cuesta un servicio) que
+ * antes caían todas a FueraDeAlcance por no existir ningún Agent que
+ * respondiera con datos reales del negocio. Sí lo produce la IA
+ * (AiIntentClassifierStrategy) — a diferencia de GestionNegocio/AdminCommand,
+ * acá no hay frases gatillo fijas: es lenguaje abierto por diseño.
  */
 enum Intent: string
 {
@@ -41,5 +48,6 @@ enum Intent: string
     case Reset = 'reset';
     case AdminCommand = 'admin_command';
     case GestionNegocio = 'gestion_negocio';
+    case InfoNegocio = 'info_negocio';
     case FueraDeAlcance = 'fuera_de_alcance';
 }

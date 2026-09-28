@@ -41,7 +41,9 @@ class AddServiceCommand
             $service = Service::create([
                 'organization_id' => $organization->id,
                 'name' => $data->name,
+                'description' => $data->description,
                 'duration_minutes' => $data->durationMinutes,
+                'price' => $data->price,
             ]);
 
             ServiceResourceRequirement::create([

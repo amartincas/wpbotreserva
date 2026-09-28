@@ -33,10 +33,18 @@ class AiIntentClassifierStrategy implements IntentClassifierStrategy
         - registro_negocio: el mensaje indica que quien escribe quiere dar de
           alta su propio negocio en la plataforma.
         - reserva: el mensaje indica que quien escribe quiere agendar un
-          turno/cita nuevo como cliente de un negocio.
+          turno/cita nuevo como cliente de un negocio. Si el mensaje combina
+          una pregunta de información (precio, horario, ubicación) CON la
+          intención de agendar (ej. "quiero reservar un corte, ¿cuánto
+          cuesta?"), clasificá como reserva: la intención de agendar tiene
+          prioridad, el dato se responde dentro de ese mismo flujo.
         - gestion_reserva: el mensaje indica que quien escribe quiere
           cancelar, reprogramar o consultar el estado de un turno/cita que
           ya tiene agendado (no uno nuevo).
+        - info_negocio: el mensaje es una pregunta sobre el negocio en sí
+          (qué servicios ofrece, en qué consiste alguno, cuánto cuesta, dónde
+          queda, de qué se trata) SIN que quien escribe esté pidiendo agendar
+          un turno.
         - fuera_de_alcance: cualquier otro caso.
         PROMPT;
 

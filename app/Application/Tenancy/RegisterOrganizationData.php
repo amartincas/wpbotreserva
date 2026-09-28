@@ -26,5 +26,6 @@ final class RegisterOrganizationData
         public readonly ?string $address,
         public readonly array $services,
         public readonly array $resources,
+        public readonly ?string $organizationDescription = null,
     ) {}
 }

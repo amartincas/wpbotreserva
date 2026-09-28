@@ -134,6 +134,73 @@ test('Fase 1: cada servicio queda asociado solo a los recursos elegidos para él
     }
 });
 
+test('Fase 1: sin organizationDescription, la organización queda con NULL — nunca inventa un valor por default', function () {
+    $channel = registerOrgFixtureChannel();
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+
+    $result = $command->handle(registerOrgData($channel));
+
+    expect(Organization::findOrFail($result->organizationId)->description)->toBeNull();
+});
+
+test('Fase 1: con organizationDescription, la organización la persiste tal cual', function () {
+    $channel = registerOrgFixtureChannel();
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+
+    $result = $command->handle(new RegisterOrganizationData(
+        organizationName: 'Barbería Don Carlos',
+        ownerPhone: '+573001234567',
+        channel: $channel,
+        city: 'Bogotá',
+        address: 'Cra 7 # 45-12',
+        services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
+        resources: [new ResourceRegistrationData('Carlos', [new WeeklyScheduleSlot(1, '09:00', '17:00')])],
+        organizationDescription: 'Barbería especializada en cortes clásicos.',
+    ));
+
+    expect(Organization::findOrFail($result->organizationId)->description)
+        ->toBe('Barbería especializada en cortes clásicos.');
+});
+
+test('Fase 1: un servicio sin descripción ni precio queda con ambos en NULL', function () {
+    $channel = registerOrgFixtureChannel();
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+
+    $result = $command->handle(registerOrgData($channel, [
+        'services' => [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
+    ]));
+
+    $service = Organization::findOrFail($result->organizationId)->services->first();
+    expect($service->description)->toBeNull();
+    expect($service->price)->toBeNull();
+});
+
+test('Fase 1: un servicio con descripción y precio numérico persiste ambos', function () {
+    $channel = registerOrgFixtureChannel();
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+
+    $result = $command->handle(registerOrgData($channel, [
+        'services' => [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0], description: 'Incluye lavado.', price: 45000.0)],
+    ]));
+
+    $service = Organization::findOrFail($result->organizationId)->services->first();
+    expect($service->description)->toBe('Incluye lavado.');
+    expect((float) $service->price)->toBe(45000.0);
+});
+
+test('Fase 1: un servicio con precio condicional (no numérico) persiste el texto en description y precio NULL', function () {
+    $channel = registerOrgFixtureChannel();
+    $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
+
+    $result = $command->handle(registerOrgData($channel, [
+        'services' => [new ServiceRegistrationData('Consulta', 60, resourceKeys: [0], description: 'depende de la valoración', price: null)],
+    ]));
+
+    $service = Organization::findOrFail($result->organizationId)->services->first();
+    expect($service->description)->toBe('depende de la valoración');
+    expect($service->price)->toBeNull();
+});
+
 test('consulta EntitlementChecker con la cantidad real de resources/services que va a crear', function () {
     $channel = registerOrgFixtureChannel();
     $calls = [];

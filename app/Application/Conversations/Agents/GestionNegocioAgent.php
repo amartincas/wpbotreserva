@@ -8,7 +8,10 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\Flows\AiFieldExtractor;
+use App\Application\Conversations\Flows\FreeTextFieldExtractor;
 use App\Application\Conversations\Flows\PersistedResourceCatalog;
+use App\Application\Conversations\Flows\ServicePriceFieldExtractor;
+use App\Application\Conversations\Flows\ServicePriceResult;
 use App\Application\Conversations\Flows\ServiceResourceSelectionFlow;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
 use App\Application\Tenancy\AddResourceCommand;
@@ -86,6 +89,10 @@ class GestionNegocioAgent implements AgentInterface
 
     private readonly WeeklyScheduleFieldExtractor $weeklyScheduleExtractor;
 
+    private readonly FreeTextFieldExtractor $freeTextExtractor;
+
+    private readonly ServicePriceFieldExtractor $servicePriceExtractor;
+
     public function __construct(
         private readonly ConversationDraftRepositoryInterface $drafts,
         private readonly ConversationSessionRepositoryInterface $sessions,
@@ -100,6 +107,8 @@ class GestionNegocioAgent implements AgentInterface
         $this->serviceDurationExtractor = new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages);
         $this->resourceNameExtractor = new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.', $botMessages);
         $this->weeklyScheduleExtractor = new WeeklyScheduleFieldExtractor($ai, $botMessages);
+        $this->freeTextExtractor = new FreeTextFieldExtractor;
+        $this->servicePriceExtractor = new ServicePriceFieldExtractor;
     }
 
     /**
@@ -142,6 +151,18 @@ class GestionNegocioAgent implements AgentInterface
                 fn (array $draft) => $this->beginServiceConfirmationDraft($session, $organization, $message->fromPhone, $draft),
             );
             $this->drafts->put($session, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingServicePrice'] ?? false) === true) {
+            $this->handleServicePrice($message, $session, $organization, $draft);
+
+            return;
+        }
+
+        if (($draft['_awaitingServiceDescription'] ?? false) === true) {
+            $this->handleServiceDescription($message, $session, $organization, $draft);
 
             return;
         }
@@ -276,6 +297,47 @@ class GestionNegocioAgent implements AgentInterface
 
         $draft['_pendingServiceDuration'] = (int) $result->value;
         unset($draft['_awaitingServiceDuration']);
+        $draft['_awaitingServiceDescription'] = true;
+        $this->drafts->put($session, $draft);
+        $this->reply($organization, $message->fromPhone, $this->botMessages->render('servicio.descripcion', ['servicio' => $draft['_pendingServiceName']])
+            ?? "Contame brevemente en qué consiste {$draft['_pendingServiceName']} (opcional, escribí \"no\" para omitir).");
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleServiceDescription(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        $result = $this->freeTextExtractor->extract($message->text, $draft);
+        $draft['_pendingServiceDescription'] = $result->value;
+        unset($draft['_awaitingServiceDescription']);
+        $draft['_awaitingServicePrice'] = true;
+        $this->drafts->put($session, $draft);
+        $this->reply($organization, $message->fromPhone, $this->botMessages->render('servicio.precio', ['servicio' => $draft['_pendingServiceName']])
+            ?? "¿Cuánto cuesta {$draft['_pendingServiceName']}? (opcional, escribí \"no\" para omitir).");
+    }
+
+    /**
+     * @param  array<string, mixed>  $draft
+     */
+    private function handleServicePrice(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
+    {
+        /** @var ServicePriceResult $priceResult */
+        $priceResult = $this->servicePriceExtractor->extract($message->text, $draft)->value;
+
+        // Mismo criterio que RegistroNegocioAgent: el texto de condición de
+        // precio no tiene columna propia, se anexa a la descripción ya
+        // capturada.
+        $description = $draft['_pendingServiceDescription'];
+        if ($priceResult->priceCondition !== null) {
+            $description = $description === null
+                ? $priceResult->priceCondition
+                : "{$description} {$priceResult->priceCondition}";
+        }
+
+        $draft['_pendingServiceDescription'] = $description;
+        $draft['_pendingServicePrice'] = $priceResult->price;
+        unset($draft['_awaitingServicePrice']);
 
         // Cada servicio tiene su/sus propios recursos, nunca "todos los que
         // ya existen por default" (caso real: agregar un servicio nuevo lo
@@ -316,7 +378,12 @@ class GestionNegocioAgent implements AgentInterface
         if (in_array($answer, self::YES_WORDS, true)) {
             $this->addService->handle(
                 $organization,
-                new ServiceRegistrationData($draft['_pendingServiceName'], $draft['_pendingServiceDuration']),
+                new ServiceRegistrationData(
+                    $draft['_pendingServiceName'],
+                    $draft['_pendingServiceDuration'],
+                    description: $draft['_pendingServiceDescription'],
+                    price: $draft['_pendingServicePrice'],
+                ),
                 $draft['_pendingServiceResourceIds'],
             );
 
@@ -352,11 +419,25 @@ class GestionNegocioAgent implements AgentInterface
             ->pluck('display_name')
             ->implode(', ');
 
+        $fallback = "Agrego el servicio *{$draft['_pendingServiceName']}* ({$draft['_pendingServiceDuration']} min), a cargo de: {$resourceNames}";
+
+        if (($draft['_pendingServicePrice'] ?? null) !== null) {
+            $fallback .= sprintf(', precio: $%s', number_format($draft['_pendingServicePrice'], 0, ',', '.'));
+        }
+
+        if (($draft['_pendingServiceDescription'] ?? null) !== null) {
+            $fallback .= " — {$draft['_pendingServiceDescription']}";
+        }
+
+        $fallback .= '. ¿Confirmás?';
+
         return $this->botMessages->render('gestion.confirmar_servicio', [
             'servicio' => $draft['_pendingServiceName'],
             'duracion' => $draft['_pendingServiceDuration'],
             'recursos' => $resourceNames,
-        ]) ?? "Agrego el servicio *{$draft['_pendingServiceName']}* ({$draft['_pendingServiceDuration']} min), a cargo de: {$resourceNames}. ¿Confirmás?";
+            'descripcion' => $draft['_pendingServiceDescription'] ?? '',
+            'precio' => ($draft['_pendingServicePrice'] ?? null) !== null ? number_format($draft['_pendingServicePrice'], 0, ',', '.') : '',
+        ]) ?? $fallback;
     }
 
     // --- Cambiar horario -------------------------------------------------
@@ -478,7 +559,7 @@ class GestionNegocioAgent implements AgentInterface
     }
 
     /**
-     * @param  Collection<int, Resource>  $resources
+     * @param  Collection<int, resource>  $resources
      */
     private function formatResourceOptions(Collection $resources): string
     {

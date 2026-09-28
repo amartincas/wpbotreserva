@@ -31,8 +31,23 @@ final class SpanishWeekdayNames
      */
     public const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
+    private const DISPLAY_NAMES = [
+        0 => 'domingo',
+        1 => 'lunes',
+        2 => 'martes',
+        3 => 'miércoles',
+        4 => 'jueves',
+        5 => 'viernes',
+        6 => 'sábado',
+    ];
+
     public static function indexOf(string $name): ?int
     {
         return self::NAMES[$name] ?? null;
+    }
+
+    public static function nameOf(int $index): ?string
+    {
+        return self::DISPLAY_NAMES[$index] ?? null;
     }
 }

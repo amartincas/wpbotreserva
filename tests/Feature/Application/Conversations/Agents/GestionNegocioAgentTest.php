@@ -17,7 +17,6 @@ use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
-use App\Domain\Conversational\Intent;
 use App\Domain\Scheduling\Resource;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
@@ -228,10 +227,12 @@ test('caso real (segunda ronda): con un solo recurso en el negocio, igual pregun
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
 
-    expect($sent)->toHaveCount(4);
-    expect($sent[3]['message'])->toContain('Recurso 1');
-    expect($sent[3]['message'])->toContain('Agregar una persona nueva');
+    expect($sent)->toHaveCount(6);
+    expect($sent[5]['message'])->toContain('Recurso 1');
+    expect($sent[5]['message'])->toContain('Agregar una persona nueva');
     expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
@@ -259,6 +260,8 @@ test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su 
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Masaje moldeador'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('45 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
     $agent->handle(gestionNegocioFixtureMessage('0'), $session, $organization); // "Agregar una persona nueva"
 
     expect($drafts->get($session)['_awaitingNewResourceName'])->toBeTrue();
@@ -296,25 +299,27 @@ test('caso real: Agregar servicio con varios recursos en el negocio pregunta qui
     $agent->handle(gestionNegocioFixtureMessage('agregar_servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
 
-    expect($sent)->toHaveCount(5);
-    expect($sent[4]['message'])->toContain('Barba');
-    expect($sent[4]['message'])->toContain('Recurso 1');
-    expect($sent[4]['message'])->toContain('Recurso 2');
+    expect($sent)->toHaveCount(7);
+    expect($sent[6]['message'])->toContain('Barba');
+    expect($sent[6]['message'])->toContain('Recurso 1');
+    expect($sent[6]['message'])->toContain('Recurso 2');
     expect($drafts->get($session)['_awaitingServiceResourceSelection'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
 
-    expect($sent)->toHaveCount(6);
-    expect($sent[5]['message'])->toContain('otra persona o recurso');
+    expect($sent)->toHaveCount(8);
+    expect($sent[7]['message'])->toContain('otra persona o recurso');
     expect($drafts->get($session)['_awaitingAddAnotherServiceResource'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro
 
-    expect($sent)->toHaveCount(7);
-    expect($sent[6]['message'])->toContain('Recurso 1');
-    expect($sent[6]['message'])->not->toContain('Recurso 2');
-    expect(array_column($sent[6]['buttons'], 'id'))->toBe(['si', 'no']);
+    expect($sent)->toHaveCount(9);
+    expect($sent[8]['message'])->toContain('Recurso 1');
+    expect($sent[8]['message'])->not->toContain('Recurso 2');
+    expect(array_column($sent[8]['buttons'], 'id'))->toBe(['si', 'no']);
     expect($organization->fresh()->services()->count())->toBe(1); // todavía no se confirmó
 
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization);
@@ -338,6 +343,8 @@ test('Agregar servicio: se puede elegir más de un recurso repitiendo "sí" en "
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // Recurso 1
     $agent->handle(gestionNegocioFixtureMessage('sí'), $session, $organization); // agrega otro
     $agent->handle(gestionNegocioFixtureMessage('3'), $session, $organization); // Recurso 3
@@ -359,6 +366,8 @@ test('Agregar servicio: si no confirma, no crea nada', function () {
     $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('Barba'), $session, $organization);
     $agent->handle(gestionNegocioFixtureMessage('20 minutos'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
     $agent->handle(gestionNegocioFixtureMessage('1'), $session, $organization); // elige "Recurso 1"
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no agrega otro recurso
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // no confirma

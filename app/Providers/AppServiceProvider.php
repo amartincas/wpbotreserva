@@ -19,6 +19,7 @@ use App\Application\Conversations\Agents\BookingChoiceAgent;
 use App\Application\Conversations\Agents\ConversationResetAgent;
 use App\Application\Conversations\Agents\GestionNegocioAgent;
 use App\Application\Conversations\Agents\GestionReservaAgent;
+use App\Application\Conversations\Agents\InfoNegocioAgent;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
 use App\Application\Conversations\Agents\ReservaAgent;
@@ -132,6 +133,7 @@ class AppServiceProvider extends ServiceProvider
                 Intent::Reset->value => $this->app->make(ConversationResetAgent::class),
                 Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
                 Intent::GestionNegocio->value => $this->app->make(GestionNegocioAgent::class),
+                Intent::InfoNegocio->value => $this->app->make(InfoNegocioAgent::class),
             ]);
         });
     }

@@ -75,6 +75,28 @@ test('agrega un servicio habilitado para varios recursos cuando se indican vario
     expect($service->resources->pluck('id')->sort()->values()->all())->toBe(collect($resourceIds)->sort()->values()->all());
 });
 
+test('Fase 1: agrega un servicio con descripción y precio, ambos persistidos', function () {
+    $organization = addServiceFixtureOrganization();
+    $resourceId = $organization->resources()->first()->id;
+
+    $service = (new AddServiceCommand(app(EntitlementCheckerInterface::class)))
+        ->handle($organization, new ServiceRegistrationData('Barba', 20, description: 'Perfilado con navaja.', price: 15000.0), [$resourceId]);
+
+    expect($service->description)->toBe('Perfilado con navaja.');
+    expect((float) $service->price)->toBe(15000.0);
+});
+
+test('Fase 1: agrega un servicio sin descripción ni precio — quedan en NULL, no se inventa nada', function () {
+    $organization = addServiceFixtureOrganization();
+    $resourceId = $organization->resources()->first()->id;
+
+    $service = (new AddServiceCommand(app(EntitlementCheckerInterface::class)))
+        ->handle($organization, new ServiceRegistrationData('Barba', 20), [$resourceId]);
+
+    expect($service->description)->toBeNull();
+    expect($service->price)->toBeNull();
+});
+
 test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea nada', function () {
     $organization = addServiceFixtureOrganization();
     $resourceId = $organization->resources()->first()->id;

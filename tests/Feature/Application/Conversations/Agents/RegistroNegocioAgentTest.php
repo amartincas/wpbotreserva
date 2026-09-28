@@ -8,6 +8,7 @@ use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
 use App\Application\Tenancy\RegisterOrganizationCommand;
+use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
@@ -209,6 +210,7 @@ test('si los 3 campos fijos ya están respondidos pero todavía no arrancó la f
         'organizationName' => 'Restaurante El Sabor',
         'city' => 'Bogotá',
         'address' => 'Calle 15 #20-10',
+        'organizationDescription' => null,
     ]);
     $sent = [];
     $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
@@ -280,29 +282,34 @@ test('Fase 1: recolecta varios servicios con recursos anidados por servicio (¿q
     $agent->handle(registroFixtureMessage('hola'), $session); // dispara el flujo
     $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
     $agent->handle(registroFixtureMessage('Bogotá'), $session);
-    $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session); // completa los 3 fijos -> arranca servicios
+    $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session); // completa los 3 fijos -> pregunta descripción del negocio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción -> completa los 4 fijos -> arranca servicios
     $agent->handle(registroFixtureMessage('Corte de cabello'), $session);
-    $agent->handle(registroFixtureMessage('30 minutos'), $session); // sin recursos todavía -> pregunta directo quién lo presta
+    $agent->handle(registroFixtureMessage('30 minutos'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> sin recursos todavía -> pregunta directo quién lo presta
     $agent->handle(registroFixtureMessage('Carlos'), $session);
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Corte de cabello -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('sí'), $session);
     $agent->handle(registroFixtureMessage('Barba'), $session);
-    $agent->handle(registroFixtureMessage('20 minutos'), $session); // Carlos ya existe -> ofrece el menú en vez de asumir que también atiende Barba
+    $agent->handle(registroFixtureMessage('20 minutos'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> Carlos ya existe -> ofrece el menú en vez de asumir que también atiende Barba
     $agent->handle(registroFixtureMessage('0'), $session); // da de alta una persona nueva en vez de reusar a Carlos
     $agent->handle(registroFixtureMessage('Ana'), $session);
     $agent->handle(registroFixtureMessage('Martes y miércoles de 10 a 18'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // termina recursos de Barba -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
 
-    expect($sent)->toHaveCount(18);
+    expect($sent)->toHaveCount(23);
 
     // El menú de recursos de Barba ofrece a Carlos (ya cargado para el
     // primer servicio) en vez de asumir en silencio que también la atiende.
-    expect($sent[12]['message'])->toContain('Quién va a prestar el servicio *Barba*');
-    expect($sent[12]['message'])->toContain('1) Carlos');
+    expect($sent[17]['message'])->toContain('Quién va a prestar el servicio *Barba*');
+    expect($sent[17]['message'])->toContain('1) Carlos');
 
-    $summary = $sent[17]['message'];
+    $summary = $sent[22]['message'];
     expect($summary)->toContain('Restaurante El Sabor');
     expect($summary)->toContain('Corte de cabello');
     expect($summary)->toContain('Barba');
@@ -361,14 +368,19 @@ test('Fase 1: un recurso ya cargado en un servicio anterior puede elegirse para 
     $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
     $agent->handle(registroFixtureMessage('Bogotá'), $session);
     $agent->handle(registroFixtureMessage('Calle 15 #20-10'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
     $agent->handle(registroFixtureMessage('Corte de cabello'), $session);
     $agent->handle(registroFixtureMessage('30 minutos'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio
     $agent->handle(registroFixtureMessage('Carlos'), $session);
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
     $agent->handle(registroFixtureMessage('no'), $session);
     $agent->handle(registroFixtureMessage('sí'), $session);
     $agent->handle(registroFixtureMessage('Corte + Barba'), $session);
-    $agent->handle(registroFixtureMessage('45 minutos'), $session); // ofrece el menú -> elige "1" (Carlos), no da de alta a nadie
+    $agent->handle(registroFixtureMessage('45 minutos'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> ofrece el menú -> elige "1" (Carlos), no da de alta a nadie
     $agent->handle(registroFixtureMessage('1'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // termina recursos -> ¿agregás otro servicio?
     $agent->handle(registroFixtureMessage('no'), $session); // confirmación
@@ -423,10 +435,10 @@ test('al confirmar con sí, registra la organización con sus servicios/recursos
         'city' => 'Bogotá',
         'address' => 'Calle 15 #20-10',
         'services' => [
-            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'resourceKeys' => [0]],
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'description' => null, 'price' => null, 'resourceKeys' => [0]],
         ],
         'resources' => [
-            ['name' => 'Carlos', 'weeklySchedule' => [new App\Application\Tenancy\WeeklyScheduleSlot(1, '09:00', '17:00')]],
+            ['name' => 'Carlos', 'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')]],
         ],
     ];
     $drafts->put($session, $completeDraft);
@@ -471,10 +483,10 @@ test('caso real: si la sesión ya estaba memoizada a otra organización (número
         'city' => 'Bogotá',
         'address' => 'Calle 15 #20-10',
         'services' => [
-            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'resourceKeys' => [0]],
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'description' => null, 'price' => null, 'resourceKeys' => [0]],
         ],
         'resources' => [
-            ['name' => 'Carlos', 'weeklySchedule' => [new App\Application\Tenancy\WeeklyScheduleSlot(1, '09:00', '17:00')]],
+            ['name' => 'Carlos', 'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')]],
         ],
     ]);
 
@@ -503,7 +515,7 @@ test('si la respuesta de confirmación no es un sí, vuelve a pedir confirmació
             ['name' => 'Corte de cabello', 'durationMinutes' => 30],
         ],
         'resources' => [
-            ['name' => 'Carlos', 'weeklySchedule' => [new App\Application\Tenancy\WeeklyScheduleSlot(1, '09:00', '17:00')]],
+            ['name' => 'Carlos', 'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')]],
         ],
     ]);
 

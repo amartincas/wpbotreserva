@@ -13,6 +13,9 @@ use App\Application\Conversations\Flows\DraftResourceCatalog;
 use App\Application\Conversations\Flows\FlowProgress;
 use App\Application\Conversations\Flows\FlowProgressStatus;
 use App\Application\Conversations\Flows\FlowStep;
+use App\Application\Conversations\Flows\FreeTextFieldExtractor;
+use App\Application\Conversations\Flows\ServicePriceFieldExtractor;
+use App\Application\Conversations\Flows\ServicePriceResult;
 use App\Application\Conversations\Flows\ServiceResourceSelectionFlow;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
 use App\Application\Tenancy\RegisterOrganizationCommand;
@@ -74,6 +77,10 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
     private readonly AiFieldExtractor $serviceDurationExtractor;
 
+    private readonly FreeTextFieldExtractor $freeTextExtractor;
+
+    private readonly ServicePriceFieldExtractor $servicePriceExtractor;
+
     private readonly ServiceResourceSelectionFlow $resourceFlow;
 
     public function __construct(
@@ -101,10 +108,24 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
                 fn () => $this->botMessages->render('registro.direccion') ?? '¿Cuál es la dirección?',
                 new AiFieldExtractor($ai, 'dirección', 'La dirección física del negocio.', $botMessages),
             ),
+            // FreeTextFieldExtractor nunca falla ni usa IA — el texto se
+            // guarda tal cual, o NULL si el dueño omite la pregunta. Puede
+            // ser un 4º FlowStep común (a diferencia de servicios/recursos)
+            // porque es un único campo de valor fijo, y ConversationalFlowRunner
+            // ya soporta valores NULL como "respondido" (ver advance()/
+            // currentStep(), que usan array_key_exists, no isset()).
+            new FlowStep(
+                'organizationDescription',
+                fn () => $this->botMessages->render('registro.descripcion_negocio')
+                    ?? 'Contame brevemente de qué se trata tu negocio (opcional, escribí "no" para omitir).',
+                new FreeTextFieldExtractor,
+            ),
         ];
 
         $this->serviceNameExtractor = new AiFieldExtractor($ai, 'nombre del servicio', 'Un servicio que ofrece el negocio.', $botMessages);
         $this->serviceDurationExtractor = new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages);
+        $this->freeTextExtractor = new FreeTextFieldExtractor;
+        $this->servicePriceExtractor = new ServicePriceFieldExtractor;
 
         // DraftResourceCatalog no tiene dependencias (nunca toca BD), así
         // que el Flow se puede armar una única vez acá — a diferencia de
@@ -301,6 +322,12 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
     }
 
     /**
+     * Estado propio por servicio (nombre → duración → descripción opcional
+     * → precio opcional → recursos). Usa array_key_exists (no isset) para
+     * descripción/precio porque ambos son legítimamente NULL cuando el
+     * dueño los omite — isset() los confundiría con "todavía no
+     * preguntado" y el bot repetiría la pregunta en bucle.
+     *
      * @param  array<string, mixed>  $draft
      */
     private function handleServiceStep(InboundMessage $message, ConversationSession $session, array $draft): void
@@ -321,12 +348,45 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             return;
         }
 
-        $result = $this->serviceDurationExtractor->extract($message->text, $draft);
+        if (! isset($draft['_currentServiceDuration'])) {
+            $result = $this->serviceDurationExtractor->extract($message->text, $draft);
 
-        if (! $result->successful) {
-            $this->reply($session, $result->reason);
+            if (! $result->successful) {
+                $this->reply($session, $result->reason);
+
+                return;
+            }
+
+            $draft['_currentServiceDuration'] = (int) $result->value;
+            $this->drafts->put($session, $draft);
+            $this->reply($session, $this->botMessages->render('servicio.descripcion', ['servicio' => $draft['_currentServiceName']])
+                ?? "Contame brevemente en qué consiste {$draft['_currentServiceName']} (opcional, escribí \"no\" para omitir).");
 
             return;
+        }
+
+        if (! array_key_exists('_currentServiceDescription', $draft)) {
+            $result = $this->freeTextExtractor->extract($message->text, $draft);
+            $draft['_currentServiceDescription'] = $result->value;
+            $this->drafts->put($session, $draft);
+            $this->reply($session, $this->botMessages->render('servicio.precio', ['servicio' => $draft['_currentServiceName']])
+                ?? "¿Cuánto cuesta {$draft['_currentServiceName']}? (opcional, escribí \"no\" para omitir).");
+
+            return;
+        }
+
+        /** @var ServicePriceResult $priceResult */
+        $priceResult = $this->servicePriceExtractor->extract($message->text, $draft)->value;
+
+        // El texto de condición de precio ("depende de la consulta") no
+        // tiene columna propia — Service solo tiene un campo description —
+        // así que se anexa a la descripción ya capturada, nunca la
+        // reemplaza.
+        $description = $draft['_currentServiceDescription'];
+        if ($priceResult->priceCondition !== null) {
+            $description = $description === null
+                ? $priceResult->priceCondition
+                : "{$description} {$priceResult->priceCondition}";
         }
 
         // El servicio no se empuja a $draft['services'] todavía — falta
@@ -334,8 +394,10 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         // finishServiceResourceSelection() cuando ServiceResourceSelectionFlow
         // termine (ver dispatch en handle()).
         $draft['_pendingServiceName'] = $draft['_currentServiceName'];
-        $draft['_pendingServiceDuration'] = (int) $result->value;
-        unset($draft['_currentServiceName']);
+        $draft['_pendingServiceDuration'] = $draft['_currentServiceDuration'];
+        $draft['_pendingServiceDescription'] = $description;
+        $draft['_pendingServicePrice'] = $priceResult->price;
+        unset($draft['_currentServiceName'], $draft['_currentServiceDuration'], $draft['_currentServiceDescription']);
 
         $draft = $this->resourceFlow->begin($draft, fn (string $text) => $this->reply($session, $text));
         $this->drafts->put($session, $draft);
@@ -350,9 +412,17 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         $draft['services'][] = [
             'name' => $draft['_pendingServiceName'],
             'durationMinutes' => $draft['_pendingServiceDuration'],
+            'description' => $draft['_pendingServiceDescription'],
+            'price' => $draft['_pendingServicePrice'],
             'resourceKeys' => $draft['_pendingServiceResourceIds'],
         ];
-        unset($draft['_pendingServiceName'], $draft['_pendingServiceDuration'], $draft['_pendingServiceResourceIds']);
+        unset(
+            $draft['_pendingServiceName'],
+            $draft['_pendingServiceDuration'],
+            $draft['_pendingServiceDescription'],
+            $draft['_pendingServicePrice'],
+            $draft['_pendingServiceResourceIds'],
+        );
         $draft['_awaitingAddAnotherService'] = true;
 
         $this->replyYesNo($session, $this->botMessages->render('registro.otro_servicio') ?? '¿Agregás otro servicio?');
@@ -409,7 +479,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         }
 
         $services = array_map(
-            fn (array $s) => new ServiceRegistrationData($s['name'], $s['durationMinutes'], $s['resourceKeys']),
+            fn (array $s) => new ServiceRegistrationData($s['name'], $s['durationMinutes'], $s['resourceKeys'], $s['description'], $s['price']),
             $draft['services'],
         );
         $resources = array_map(
@@ -425,6 +495,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             address: $draft['address'] ?? null,
             services: $services,
             resources: $resources,
+            organizationDescription: $draft['organizationDescription'] ?? null,
         ));
 
         // Caso real: en un Channel que ya tenía otra Organization vinculada
@@ -459,7 +530,17 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
                     $s['resourceKeys'],
                 ));
 
-                return "- {$s['name']} ({$s['durationMinutes']} min), a cargo de: {$resourceNames}";
+                $line = "- {$s['name']} ({$s['durationMinutes']} min), a cargo de: {$resourceNames}";
+
+                if ($s['price'] !== null) {
+                    $line .= sprintf(', precio: $%s', number_format($s['price'], 0, ',', '.'));
+                }
+
+                if ($s['description'] !== null) {
+                    $line .= " — {$s['description']}";
+                }
+
+                return $line;
             },
             $draft['services'],
         ));
@@ -478,11 +559,14 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             $draft['resources'],
         ));
 
+        $description = $draft['organizationDescription'] ?? null;
+        $descriptionLine = $description !== null ? "Descripción: {$description}\n" : '';
+
         $fallback = <<<TEXT
             Confirmá que estos datos son correctos:
 
             Negocio: {$draft['organizationName']}
-            Ciudad: {$draft['city']}
+            {$descriptionLine}Ciudad: {$draft['city']}
             Dirección: {$draft['address']}
 
             Servicios:
@@ -496,6 +580,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
 
         return $this->botMessages->render('registro.resumen', [
             'negocio' => $draft['organizationName'],
+            'descripcion' => $description ?? '',
             'ciudad' => $draft['city'],
             'direccion' => $draft['address'],
             'servicios' => $servicesText,

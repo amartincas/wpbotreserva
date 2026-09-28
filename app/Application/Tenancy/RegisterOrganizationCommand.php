@@ -28,6 +28,7 @@ class RegisterOrganizationCommand
         return DB::transaction(function () use ($data) {
             $organization = Organization::create([
                 'name' => $data->organizationName,
+                'description' => $data->organizationDescription,
                 'owner_phone' => $data->ownerPhone,
             ]);
 
@@ -76,7 +77,9 @@ class RegisterOrganizationCommand
                 $service = Service::create([
                     'organization_id' => $organization->id,
                     'name' => $serviceData->name,
+                    'description' => $serviceData->description,
                     'duration_minutes' => $serviceData->durationMinutes,
+                    'price' => $serviceData->price,
                 ]);
 
                 ServiceResourceRequirement::create([
