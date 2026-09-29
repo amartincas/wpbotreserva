@@ -32,5 +32,5 @@ interface ResourceCatalogInterface
      * @param  WeeklyScheduleSlot[]  $schedule
      * @return array{0: array<string, mixed>, 1: int|string} [$draft actualizado, id del recurso nuevo]
      */
-    public function createNew(array $draft, string $name, array $schedule): array;
+    public function createNew(array $draft, string $name, array $schedule, ?string $contactPhone = null): array;
 }

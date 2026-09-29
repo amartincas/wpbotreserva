@@ -8,6 +8,7 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\OrganizationlessAgentInterface;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\Flows\AiFieldExtractor;
+use App\Application\Conversations\Flows\ContactPhoneFieldExtractor;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Conversations\Flows\DraftResourceCatalog;
 use App\Application\Conversations\Flows\DurationFieldExtractor;
@@ -137,6 +138,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         $this->resourceFlow = new ServiceResourceSelectionFlow(
             new DraftResourceCatalog,
             new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.', $botMessages),
+            new ContactPhoneFieldExtractor($botMessages),
             new WeeklyScheduleFieldExtractor($ai, $botMessages),
             self::YES_WORDS,
             self::NO_WORDS,
@@ -491,7 +493,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             $draft['services'],
         );
         $resources = array_map(
-            fn (array $r) => new ResourceRegistrationData($r['name'], $r['weeklySchedule']),
+            fn (array $r) => new ResourceRegistrationData($r['name'], $r['weeklySchedule'], $r['contactPhone'] ?? null),
             $draft['resources'],
         );
 

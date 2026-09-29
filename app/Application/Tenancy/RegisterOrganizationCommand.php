@@ -52,6 +52,7 @@ class RegisterOrganizationCommand
                     'location_id' => $location->id,
                     'resource_type' => ResourceType::HUMAN,
                     'display_name' => $resourceData->name,
+                    'contact_phone' => $resourceData->contactPhone,
                 ]);
 
                 foreach ($resourceData->weeklySchedule as $slot) {

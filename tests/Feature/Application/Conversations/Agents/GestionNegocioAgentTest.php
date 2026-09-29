@@ -275,16 +275,25 @@ test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su 
 
     $agent->handle(gestionNegocioFixtureMessage('Edgar Torres'), $session, $organization);
 
+    // Fase 2A: tras el nombre, el siguiente estado es el teléfono
+    // obligatorio del profesional — no el horario todavía.
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+    expect($sent[array_key_last($sent)]['message'])->toContain('Edgar Torres');
+
+    $agent->handle(gestionNegocioFixtureMessage('+573007778899'), $session, $organization);
+
     expect($drafts->get($session)['_awaitingNewResourceSchedule'])->toBeTrue();
     expect($sent[array_key_last($sent)]['message'])->toContain('Edgar Torres');
 
     $agent->handle(gestionNegocioFixtureMessage('martes de 10 a 18'), $session, $organization);
 
-    // La persona ya quedó creada como recurso real del negocio, con su horario.
+    // La persona ya quedó creada como recurso real del negocio, con su
+    // horario y su teléfono de contacto (cast por PhoneNumberCast).
     $resource = Resource::where('display_name', 'Edgar Torres')->firstOrFail();
     expect($resource->organization_id)->toBe($organization->id);
     expect($resource->schedules)->toHaveCount(1);
     expect($resource->schedules->first()->weekday)->toBe(2);
+    expect($resource->contact_phone->value())->toBe('+573007778899');
     expect($drafts->get($session)['_awaitingAddAnotherServiceResource'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization);
@@ -293,6 +302,36 @@ test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su 
     $service = $organization->fresh()->services()->where('name', 'Masaje moldeador')->firstOrFail();
     expect($service->resources)->toHaveCount(1);
     expect($service->resources->first()->display_name)->toBe('Edgar Torres');
+});
+
+test('Fase 2A: un rechazo explícito y un teléfono inválido re-preguntan sin avanzar al horario, también en GestionNegocioAgent', function () {
+    $organization = gestionNegocioFixtureOrganization(resourceCount: 2);
+    $session = gestionNegocioFixtureSession($organization);
+    $drafts = gestionNegocioFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionNegocioAgent($drafts, $sent, gestionNegocioQueuedAi(['Masaje moldeador', 'Edgar Torres']));
+
+    $agent->handle(gestionNegocioFixtureMessage('agregar servicio'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('Masaje moldeador'), $session, $organization);
+    $agent->handle(gestionNegocioFixtureMessage('45 minutos'), $session, $organization); // determinista
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin descripción
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // sin precio
+    $agent->handle(gestionNegocioFixtureMessage('0'), $session, $organization); // "Agregar una persona nueva"
+    $agent->handle(gestionNegocioFixtureMessage('Edgar Torres'), $session, $organization);
+
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+    $countBeforeRetries = count($sent);
+
+    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // rechazo explícito
+    expect($sent[array_key_last($sent)]['message'])->toContain('Necesitamos');
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+
+    $agent->handle(gestionNegocioFixtureMessage('no tengo'), $session, $organization); // ambiguo
+    expect($sent[array_key_last($sent)]['message'])->toContain('No pude reconocer el número');
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+
+    expect(count($sent))->toBe($countBeforeRetries + 2); // ninguno de los 2 reintentos avanzó el flujo
+    expect(Resource::where('display_name', 'Edgar Torres')->exists())->toBeFalse(); // todavía no se creó
 });
 
 test('caso real: Agregar servicio con varios recursos en el negocio pregunta quién lo presta — NO lo habilita para todos por default', function () {

@@ -24,10 +24,10 @@ final class DraftResourceCatalog implements ResourceCatalogInterface
         );
     }
 
-    public function createNew(array $draft, string $name, array $schedule): array
+    public function createNew(array $draft, string $name, array $schedule, ?string $contactPhone = null): array
     {
         $draft['resources'] ??= [];
-        $draft['resources'][] = ['name' => $name, 'weeklySchedule' => $schedule];
+        $draft['resources'][] = ['name' => $name, 'weeklySchedule' => $schedule, 'contactPhone' => $contactPhone];
         $index = array_key_last($draft['resources']);
 
         return [$draft, $index];

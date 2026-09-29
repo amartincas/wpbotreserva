@@ -58,6 +58,32 @@ test('crea una persona/recurso nueva con su horario semanal, en la sede principa
     expect($organization->resources()->count())->toBe(2);
 });
 
+test('Fase 2A: persiste el contact_phone del recurso nuevo, cast por PhoneNumberCast, distinto de owner_phone', function () {
+    $organization = addResourceFixtureOrganization();
+
+    $resource = (new AddResourceCommand(app(EntitlementCheckerInterface::class)))->handle(
+        $organization,
+        new ResourceRegistrationData('Edgar Torres', [new WeeklyScheduleSlot(2, '10:00', '18:00')], '+573007778899'),
+    );
+
+    expect($resource->contact_phone->value())->toBe('+573007778899');
+    expect($resource->contact_phone->value())->not->toBe($organization->owner_phone);
+});
+
+test('Fase 2A / PhoneNumberCast: un Resource histórico con contact_phone NULL se lee sin error, no adivina ni rompe', function () {
+    $organization = addResourceFixtureOrganization();
+
+    // Mismo caso que un Resource creado antes de Fase 2A (columna nullable,
+    // nunca poblada) — el cast debe leerlo como NULL, nunca lanzar.
+    $historic = (new AddResourceCommand(app(EntitlementCheckerInterface::class)))->handle(
+        $organization,
+        new ResourceRegistrationData('Recurso histórico', []),
+    );
+
+    expect($historic->contact_phone)->toBeNull();
+    expect($historic->fresh()->contact_phone)->toBeNull();
+});
+
 test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea nada', function () {
     $organization = addResourceFixtureOrganization();
     $denyAll = new class implements EntitlementCheckerInterface

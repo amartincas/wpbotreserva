@@ -3,6 +3,7 @@
 namespace App\Domain\Scheduling;
 
 use App\Domain\Booking\BookingResource;
+use App\Domain\Shared\PhoneNumberCast;
 use App\Domain\Tenancy\BelongsToOrganization;
 use App\Domain\Tenancy\Location;
 use App\Enums\ResourceType;
@@ -40,6 +41,7 @@ class Resource extends Model
             'resource_type' => ResourceType::class,
             'capacity' => 'integer',
             'is_active' => 'boolean',
+            'contact_phone' => PhoneNumberCast::class,
         ];
     }
 

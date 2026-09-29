@@ -8,6 +8,7 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\Flows\AiFieldExtractor;
+use App\Application\Conversations\Flows\ContactPhoneFieldExtractor;
 use App\Application\Conversations\Flows\DurationFieldExtractor;
 use App\Application\Conversations\Flows\FreeTextFieldExtractor;
 use App\Application\Conversations\Flows\PersistedResourceCatalog;
@@ -89,6 +90,8 @@ class GestionNegocioAgent implements AgentInterface
 
     private readonly AiFieldExtractor $resourceNameExtractor;
 
+    private readonly ContactPhoneFieldExtractor $contactPhoneExtractor;
+
     private readonly WeeklyScheduleFieldExtractor $weeklyScheduleExtractor;
 
     private readonly FreeTextFieldExtractor $freeTextExtractor;
@@ -110,6 +113,7 @@ class GestionNegocioAgent implements AgentInterface
             new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages)
         );
         $this->resourceNameExtractor = new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.', $botMessages);
+        $this->contactPhoneExtractor = new ContactPhoneFieldExtractor($botMessages);
         $this->weeklyScheduleExtractor = new WeeklyScheduleFieldExtractor($ai, $botMessages);
         $this->freeTextExtractor = new FreeTextFieldExtractor;
         $this->servicePriceExtractor = new ServicePriceFieldExtractor;
@@ -127,6 +131,7 @@ class GestionNegocioAgent implements AgentInterface
         return new ServiceResourceSelectionFlow(
             new PersistedResourceCatalog($organization, $this->addResource),
             $this->resourceNameExtractor,
+            $this->contactPhoneExtractor,
             $this->weeklyScheduleExtractor,
             self::YES_WORDS,
             self::NO_WORDS,

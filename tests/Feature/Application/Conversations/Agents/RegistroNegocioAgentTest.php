@@ -381,6 +381,7 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio
     $agent->handle(registroFixtureMessage('Carlos'), $session);
+    $agent->handle(registroFixtureMessage('+573001112233'), $session); // Fase 2A: teléfono obligatorio del profesional
     // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): tras crear a Carlos (el
     // único recurso), el draft queda con exactamente 1 -> autoasigna y pasa
     // directo a "¿agregás otro servicio?", sin preguntar "¿agregás otra
@@ -408,6 +409,14 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
 
     $carlos = $org->resources->firstOrFail();
     expect($carlos->display_name)->toBe('Carlos');
+
+    // Fase 2A: contact_phone (el profesional) queda persistido, cast por
+    // PhoneNumberCast, y es un dato distinto de owner_phone (quien tuvo la
+    // conversación de registro) — no hay ningún fallback implícito entre
+    // ambos.
+    expect($carlos->contact_phone->value())->toBe('+573001112233');
+    expect($org->owner_phone)->toBe('+573001234567');
+    expect($carlos->contact_phone->value())->not->toBe($org->owner_phone);
 
     // Carlos queda prestando los dos servicios.
     foreach ($org->services as $service) {
@@ -438,6 +447,7 @@ test('post-E2E Fase 1 (Hallazgo 1, segunda ronda): negocio nuevo, primer servici
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> 0 recursos -> pide directo el nombre
     $agent->handle(registroFixtureMessage('Laura'), $session);
+    $agent->handle(registroFixtureMessage('3011234567'), $session); // Fase 2A: teléfono obligatorio, formato local sin +57
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session); // Laura queda como el único recurso -> autoasignación inmediata
 
     // La pregunta "¿Agregás otra persona o recurso para este servicio?"
@@ -641,6 +651,7 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     $agent->handle(registroFixtureMessage('Relajante'), $session); // descripción del servicio 1
     $agent->handle(registroFixtureMessage('45000'), $session); // precio NUMÉRICO del servicio 1
     $agent->handle(registroFixtureMessage('Laura'), $session); // único recurso -> 0 existentes, pide nombre
+    $agent->handle(registroFixtureMessage('+573011234567'), $session); // Fase 2A: teléfono obligatorio
     // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): tras crear a Laura (el
     // único recurso), autoasigna y pasa directo a "¿agregás otro
     // servicio?" — ya no pregunta "¿agregás otra persona?", así que no
@@ -673,4 +684,91 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     // ni mezcla sus precios/descripciones individuales.
     expect($masaje->resources->pluck('display_name')->all())->toBe(['Laura']);
     expect($consulta->resources->pluck('display_name')->all())->toBe(['Laura']);
+});
+
+test('Fase 2A: un rechazo explícito, una respuesta ambigua y un teléfono inválido re-preguntan sin avanzar al horario — el dato es obligatorio', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    // Draft sembrado directamente en el estado "ya se dio el nombre del
+    // recurso nuevo, falta su teléfono" — mismo patrón de seed directo ya
+    // usado en este archivo para probar un estado puntual sin repetir toda
+    // la conversación previa.
+    $drafts->put($session, [
+        '_started' => true,
+        'organizationName' => 'Restaurante El Sabor',
+        'city' => 'Bogotá',
+        'address' => 'Calle 15 #20-10',
+        'organizationDescription' => null,
+        '_collectingServices' => true,
+        'resources' => [],
+        'services' => [],
+        '_pendingServiceName' => 'Corte de cabello',
+        '_pendingServiceDuration' => 30,
+        '_pendingServiceDescription' => null,
+        '_pendingServicePrice' => null,
+        '_pendingServiceResourceIds' => [],
+        '_awaitingNewResourceContactPhone' => true,
+        '_pendingNewResourceName' => 'Carlos',
+    ]);
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
+
+    // Rechazo explícito ("no") -> re-pregunta explicando por qué hace falta.
+    $agent->handle(registroFixtureMessage('no'), $session);
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('Carlos');
+    expect($sent[0]['message'])->toContain('Necesitamos');
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+    expect($drafts->get($session))->not->toHaveKey('_pendingNewResourceContactPhone');
+
+    // Respuesta ambigua (sin ningún dígito) -> re-pregunta, mensaje distinto
+    // al de rechazo explícito.
+    $agent->handle(registroFixtureMessage('no tengo uno todavía'), $session);
+    expect($sent)->toHaveCount(2);
+    expect($sent[1]['message'])->toContain('No pude reconocer el número');
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+
+    // Teléfono con formato inválido -> re-pregunta, nunca se adivina.
+    $agent->handle(registroFixtureMessage('123'), $session);
+    expect($sent)->toHaveCount(3);
+    expect($sent[2]['message'])->toContain('No pude reconocer el número');
+    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
+
+    // Un teléfono válido recién ahí avanza al horario.
+    $agent->handle(registroFixtureMessage('+573001112233'), $session);
+    expect($drafts->get($session))->not->toHaveKey('_awaitingNewResourceContactPhone');
+    expect($drafts->get($session)['_awaitingNewResourceSchedule'])->toBeTrue();
+    expect($drafts->get($session)['_pendingNewResourceContactPhone'])->toBe('+573001112233');
+    expect($sent[array_key_last($sent)]['message'])->toContain('horario');
+});
+
+test('Fase 2A: si el teléfono del profesional coincide con owner_phone, se acepta igual — son datos independientes, sin fallback implícito entre ambos', function () {
+    $session = registroFixtureSession(); // customer_phone/ownerPhone = +573001234567
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $ai = registroQueuedAi(['Spa Lucía', 'Cali', 'Carrera 10 #20-30', 'Masaje relajante', 'Laura']);
+    $agent = buildRegistroAgent($drafts, $sent, $ai);
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Spa Lucía'), $session);
+    $agent->handle(registroFixtureMessage('Cali'), $session);
+    $agent->handle(registroFixtureMessage('Carrera 10 #20-30'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
+    $agent->handle(registroFixtureMessage('Masaje relajante'), $session);
+    $agent->handle(registroFixtureMessage('45 minutos'), $session); // determinista
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio
+    $agent->handle(registroFixtureMessage('Laura'), $session);
+    $agent->handle(registroFixtureMessage('+573001234567'), $session); // mismo número que el dueño que está registrando
+    $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    $org = Organization::firstOrFail();
+    $laura = $org->resources->firstOrFail();
+    expect($laura->contact_phone->value())->toBe('+573001234567');
+    expect($org->owner_phone)->toBe('+573001234567');
+    // Coinciden porque el usuario lo escribió así, no porque el código haya
+    // copiado uno al otro — Fase 2A prohíbe explícitamente ese fallback.
+    expect($laura->contact_phone->value())->toBe($org->owner_phone);
 });

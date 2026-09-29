@@ -39,6 +39,7 @@ final class ServiceResourceSelectionFlow
     public function __construct(
         private readonly ResourceCatalogInterface $catalog,
         private readonly AiFieldExtractor $resourceNameExtractor,
+        private readonly ContactPhoneFieldExtractor $contactPhoneExtractor,
         private readonly WeeklyScheduleFieldExtractor $weeklyScheduleExtractor,
         private readonly array $yesWords,
         private readonly array $noWords,
@@ -52,6 +53,7 @@ final class ServiceResourceSelectionFlow
     {
         return ($draft['_awaitingServiceResourceSelection'] ?? false) === true
             || ($draft['_awaitingNewResourceName'] ?? false) === true
+            || ($draft['_awaitingNewResourceContactPhone'] ?? false) === true
             || ($draft['_awaitingNewResourceSchedule'] ?? false) === true
             || ($draft['_awaitingAddAnotherServiceResource'] ?? false) === true;
     }
@@ -104,6 +106,10 @@ final class ServiceResourceSelectionFlow
 
         if (($draft['_awaitingNewResourceSchedule'] ?? false) === true) {
             return $this->handleNewResourceSchedule($message, $draft, $reply, $replyYesNo, $onDone);
+        }
+
+        if (($draft['_awaitingNewResourceContactPhone'] ?? false) === true) {
+            return $this->handleNewResourceContactPhone($message, $draft, $reply);
         }
 
         if (($draft['_awaitingNewResourceName'] ?? false) === true) {
@@ -189,10 +195,42 @@ final class ServiceResourceSelectionFlow
 
         $draft['_pendingNewResourceName'] = $result->value;
         unset($draft['_awaitingNewResourceName']);
+        $draft['_awaitingNewResourceContactPhone'] = true;
+        $reply(
+            $this->botMessages?->render('recurso.telefono_pregunta', ['recurso' => $result->value])
+                ?? "¿Cuál es el número de WhatsApp de {$result->value} para avisarle cuando tenga una reserva?"
+        );
+
+        return $draft;
+    }
+
+    /**
+     * Fase 2A: obligatorio (decisión de producto aprobada) — a diferencia
+     * de handleNewResourceName/handleServiceResourceSelection, acá un fallo
+     * de ContactPhoneFieldExtractor (inválido, ambiguo, o un "no" explícito)
+     * nunca avanza el draft; siempre vuelve a preguntar. No existe ningún
+     * camino desde este método que deje _pendingNewResourceContactPhone sin
+     * setear.
+     *
+     * @param  array<string, mixed>  $draft
+     * @return array<string, mixed>
+     */
+    private function handleNewResourceContactPhone(InboundMessage $message, array $draft, Closure $reply): array
+    {
+        $result = $this->contactPhoneExtractor->extract($message->text, $draft);
+
+        if (! $result->successful) {
+            $reply($result->reason);
+
+            return $draft;
+        }
+
+        $draft['_pendingNewResourceContactPhone'] = $result->value;
+        unset($draft['_awaitingNewResourceContactPhone']);
         $draft['_awaitingNewResourceSchedule'] = true;
         $reply(
-            $this->botMessages?->render('recurso.horario_pregunta', ['recurso' => $result->value])
-                ?? "¿Qué días y en qué horario atiende {$result->value}? (ej: \"Lunes a Viernes de 9 a 17\")"
+            $this->botMessages?->render('recurso.horario_pregunta', ['recurso' => $draft['_pendingNewResourceName']])
+                ?? "¿Qué días y en qué horario atiende {$draft['_pendingNewResourceName']}? (ej: \"Lunes a Viernes de 9 a 17\")"
         );
 
         return $draft;
@@ -220,10 +258,15 @@ final class ServiceResourceSelectionFlow
             return $draft;
         }
 
-        [$draft, $resourceId] = $this->catalog->createNew($draft, $draft['_pendingNewResourceName'], $result->value);
+        [$draft, $resourceId] = $this->catalog->createNew(
+            $draft,
+            $draft['_pendingNewResourceName'],
+            $result->value,
+            $draft['_pendingNewResourceContactPhone'],
+        );
 
         $draft['_pendingServiceResourceIds'] = array_values(array_unique([...$draft['_pendingServiceResourceIds'], $resourceId]));
-        unset($draft['_awaitingNewResourceSchedule'], $draft['_pendingNewResourceName']);
+        unset($draft['_awaitingNewResourceSchedule'], $draft['_pendingNewResourceName'], $draft['_pendingNewResourceContactPhone']);
 
         if (count($this->catalog->listExisting($draft)) === 1) {
             return $onDone($draft);
