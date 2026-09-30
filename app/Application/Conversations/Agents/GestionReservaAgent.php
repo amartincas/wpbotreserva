@@ -175,9 +175,13 @@ class GestionReservaAgent implements AgentInterface
     }
 
     /**
+     * Visibilidad pública (Fase 3): ConfirmacionAsistenciaAgent la reutiliza
+     * tal cual para el handoff "No → Cancelar/Modificar", sin duplicar esta
+     * lógica ni el resto del flujo de gestión de reserva.
+     *
      * @param  array<string, mixed>  $draft
      */
-    private function presentBookingAndAskAction(ConversationSession $session, Organization $organization, string $toPhone, array $draft, Booking $booking): void
+    public function presentBookingAndAskAction(ConversationSession $session, Organization $organization, string $toPhone, array $draft, Booking $booking): void
     {
         $booking->loadMissing('service');
         $draft['_awaiting_action'] = true;
@@ -202,7 +206,7 @@ class GestionReservaAgent implements AgentInterface
         if (in_array($answer, self::ACTION_STATUS, true)) {
             $this->drafts->forget($session);
             $this->reply($organization, $message->fromPhone, sprintf(
-                "Tu turno de %s está %s para el %s.",
+                'Tu turno de %s está %s para el %s.',
                 $booking->service->name,
                 $this->statusLabel($booking->status),
                 $booking->starts_at->translatedFormat('l d/m/Y H:i'),
@@ -344,7 +348,7 @@ class GestionReservaAgent implements AgentInterface
 
         try {
             $this->rescheduleBooking->handle($booking, CarbonImmutable::parse($draft['newChosenSlot']));
-        } catch (\App\Domain\Booking\Exceptions\SlotNoLongerAvailableException) {
+        } catch (SlotNoLongerAvailableException) {
             $this->drafts->forget($session);
             $this->reply($organization, $message->fromPhone, 'Justo se ocupó ese horario. Escribinos de nuevo si querés reprogramar.');
 
@@ -354,7 +358,6 @@ class GestionReservaAgent implements AgentInterface
         $this->drafts->forget($session);
         $this->reply($organization, $message->fromPhone, 'Listo, tu turno quedó reprogramado.');
     }
-
 
     /**
      * @param  Collection<int, Booking>  $bookings

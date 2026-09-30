@@ -6,12 +6,14 @@ use App\Domain\CRM\Customer;
 use App\Domain\Scheduling\Service;
 use App\Domain\Tenancy\BelongsToOrganization;
 use App\Domain\Tenancy\Location;
+use App\Enums\AttendanceStatus;
 use App\Enums\BookingCreatedVia;
 use App\Enums\BookingStatus;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Aggregate Root más importante del sistema (Parte III). La creación real
@@ -34,6 +36,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'created_via',
     'reminder_sent_at',
     'upcoming_reminder_sent_at',
+    'attendance_status',
+    'attendance_responded_at',
 ])]
 class Booking extends Model
 {
@@ -54,6 +58,8 @@ class Booking extends Model
             'created_via' => BookingCreatedVia::class,
             'reminder_sent_at' => 'datetime',
             'upcoming_reminder_sent_at' => 'datetime',
+            'attendance_status' => AttendanceStatus::class,
+            'attendance_responded_at' => 'datetime',
         ];
     }
 
@@ -75,6 +81,11 @@ class Booking extends Model
     public function bookingResources(): HasMany
     {
         return $this->hasMany(BookingResource::class);
+    }
+
+    public function pendingAttendanceConfirmation(): HasOne
+    {
+        return $this->hasOne(PendingAttendanceConfirmation::class);
     }
 
     public function isTerminal(): bool

@@ -1,9 +1,11 @@
 <?php
 
+use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
+use App\Application\Exceptions\NotificationDeliveryException;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -11,6 +13,7 @@ use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
+use App\Domain\Booking\PendingAttendanceConfirmation;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
@@ -94,7 +97,7 @@ afterEach(function () {
     CarbonImmutable::setTestNow();
 });
 
-test('una reserva a ~23.5h manda el recordatorio por plantilla con los datos correctos', function () {
+test('una reserva a ~23.5h manda el recordatorio de confirmación de asistencia con los datos correctos', function () {
     $organization = upcomingReminderFixtureOrganization();
     $booking = upcomingReminderFixtureBooking($organization, now()->addHours(23)->addMinutes(30));
 
@@ -104,15 +107,26 @@ test('una reserva a ~23.5h manda el recordatorio por plantilla con los datos cor
     expect($this->sent)->toHaveCount(1);
     expect($this->sent[0]['type'])->toBe('template');
     expect($this->sent[0]['toPhoneE164'])->toBe('+573001234567');
-    expect($this->sent[0]['templateName'])->toBe('recordatorio_reserva');
+    expect($this->sent[0]['templateName'])->toBe('confirmacion_asistencia_reserva');
     expect($this->sent[0]['language'])->toBe('es');
     expect($this->sent[0]['bodyParameters'])->toBe([
-        'Ana',
         'Corte de cabello',
-        'AMC Studios',
         $booking->starts_at->format('d/m/Y'),
         $booking->starts_at->format('H:i'),
     ]);
+});
+
+test('Fase 3: un envío exitoso crea la fila PendingAttendanceConfirmation con expires_at = starts_at', function () {
+    $organization = upcomingReminderFixtureOrganization();
+    $booking = upcomingReminderFixtureBooking($organization, now()->addHours(23)->addMinutes(30));
+
+    $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
+
+    $pending = PendingAttendanceConfirmation::where('booking_id', $booking->id)->first();
+    expect($pending)->not->toBeNull();
+    expect($pending->template_name)->toBe('confirmacion_asistencia_reserva');
+    expect($pending->expires_at->equalTo($booking->fresh()->starts_at))->toBeTrue();
+    expect($pending->declined_at)->toBeNull();
 });
 
 test('una reserva ya recordada no recibe un segundo recordatorio', function () {
@@ -123,6 +137,7 @@ test('una reserva ya recordada no recibe un segundo recordatorio', function () {
     $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
 
     expect($this->sent)->toHaveCount(1);
+    expect(PendingAttendanceConfirmation::where('booking_id', $booking->id)->count())->toBe(1);
 });
 
 test('una reserva fuera de la ventana de 23-24h no recibe recordatorio todavía', function () {
@@ -148,7 +163,7 @@ test('una reserva ya pasada la ventana (menos de 23h) tampoco recibe recordatori
 test('una reserva cancelada dentro de la ventana no recibe recordatorio', function () {
     $organization = upcomingReminderFixtureOrganization();
     $booking = upcomingReminderFixtureBooking($organization, now()->addHours(23)->addMinutes(30));
-    (new App\Application\Booking\CancelBookingCommand(app(BookingSchedulerInterface::class)))->handle($booking);
+    (new CancelBookingCommand(app(BookingSchedulerInterface::class)))->handle($booking);
 
     $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
 
@@ -165,7 +180,7 @@ test('si el envío falla, no marca upcoming_reminder_sent_at y no interrumpe el 
 
         public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void
         {
-            throw new App\Application\Exceptions\NotificationDeliveryException('plantilla no aprobada todavía');
+            throw new NotificationDeliveryException('plantilla no aprobada todavía');
         }
 
         public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
@@ -175,4 +190,57 @@ test('si el envío falla, no marca upcoming_reminder_sent_at y no interrumpe el 
     $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
 
     expect($booking->fresh()->upcoming_reminder_sent_at)->toBeNull();
+    expect(PendingAttendanceConfirmation::where('booking_id', $booking->id)->exists())->toBeFalse();
+});
+
+test('Fase 3: si sendTemplate() tiene éxito pero falla la persistencia posterior, hace rollback completo (upcoming_reminder_sent_at y pending quedan como si nada hubiera pasado)', function () {
+    $organization = upcomingReminderFixtureOrganization();
+    $booking = upcomingReminderFixtureBooking($organization, now()->addHours(23)->addMinutes(30));
+
+    // Fila preexistente para este booking_id: el unique(booking_id) de la
+    // tabla hace que el PendingAttendanceConfirmation::create() DENTRO de
+    // la transacción falle de verdad (constraint real, no simulado) —
+    // dispara el mismo catch que cualquier otro fallo de persistencia.
+    PendingAttendanceConfirmation::create([
+        'booking_id' => $booking->id, 'template_name' => 'otra_fila_preexistente', 'expires_at' => now()->addDay(),
+    ]);
+
+    $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
+
+    // sendTemplate() sí se llamó (Meta aceptó el mensaje) — eso no se revierte,
+    // es la persistencia LOCAL posterior la que se atomiza.
+    expect($this->sent)->toHaveCount(1);
+    // El rollback deja upcoming_reminder_sent_at en NULL — no en el valor
+    // que la transacción abortada intentó escribir.
+    expect($booking->fresh()->upcoming_reminder_sent_at)->toBeNull();
+    // Sigue existiendo únicamente la fila preexistente (1), nunca una
+    // segunda creada a medias por la transacción fallida.
+    expect(PendingAttendanceConfirmation::where('booking_id', $booking->id)->count())->toBe(1);
+});
+
+test('Fase 3: un fallo de persistencia en una reserva no interrumpe el procesamiento de las siguientes del mismo lote', function () {
+    $organization = upcomingReminderFixtureOrganization();
+    // now() en el test queda fijado a una hora en punto (beforeEach) — dos
+    // slots de 30 min consecutivos y alineados, sin solaparse.
+    $failingBooking = upcomingReminderFixtureBooking($organization, now()->addHours(23));
+    $okBooking = upcomingReminderFixtureBooking($organization, now()->addHours(23)->addMinutes(30));
+
+    PendingAttendanceConfirmation::create([
+        'booking_id' => $failingBooking->id, 'template_name' => 'otra_fila_preexistente', 'expires_at' => now()->addDay(),
+    ]);
+
+    $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
+
+    // Ambas reservas reciben el intento de envío (sendTemplate se llama
+    // antes de que la persistencia pueda fallar).
+    expect($this->sent)->toHaveCount(2);
+
+    // La que falló: sin upcoming_reminder_sent_at, sigue con solo su fila
+    // preexistente.
+    expect($failingBooking->fresh()->upcoming_reminder_sent_at)->toBeNull();
+    expect(PendingAttendanceConfirmation::where('booking_id', $failingBooking->id)->count())->toBe(1);
+
+    // La siguiente del lote se procesó normalmente pese al fallo anterior.
+    expect($okBooking->fresh()->upcoming_reminder_sent_at)->not->toBeNull();
+    expect(PendingAttendanceConfirmation::where('booking_id', $okBooking->id)->exists())->toBeTrue();
 });

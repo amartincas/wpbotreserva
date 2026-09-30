@@ -38,6 +38,13 @@ namespace App\Domain\Conversational;
  * respondiera con datos reales del negocio. Sí lo produce la IA
  * (AiIntentClassifierStrategy) — a diferencia de GestionNegocio/AdminCommand,
  * acá no hay frases gatillo fijas: es lenguaje abierto por diseño.
+ *
+ * ConfirmacionAsistencia (Fase 3): respuesta del cliente a un recordatorio
+ * de asistencia ya enviado — la produce PendingAttendanceConfirmationStrategy,
+ * nunca la IA (coincidencia exacta de "sí"/"no"/ids de botón, y solo cuando
+ * existe una fila pendiente real para ese cliente y esa Organization). El
+ * "No" de este flujo entrega el control a GestionReserva sin duplicar su
+ * lógica — ver ConfirmacionAsistenciaAgent.
  */
 enum Intent: string
 {
@@ -49,5 +56,6 @@ enum Intent: string
     case AdminCommand = 'admin_command';
     case GestionNegocio = 'gestion_negocio';
     case InfoNegocio = 'info_negocio';
+    case ConfirmacionAsistencia = 'confirmacion_asistencia';
     case FueraDeAlcance = 'fuera_de_alcance';
 }

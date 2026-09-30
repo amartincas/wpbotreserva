@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Application\Booking\Listeners\CleanupPendingAttendanceConfirmationOnBookingRescheduled;
+use App\Application\Booking\Listeners\RecordAttendanceDeclineOnBookingCancelled;
 use App\Application\Booking\Listeners\SendBookingCancellationNotification;
 use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
 use App\Application\Booking\Listeners\SendBookingRescheduleNotification;
@@ -19,6 +21,7 @@ use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
 use App\Application\Conversations\Agents\BookingChoiceAgent;
+use App\Application\Conversations\Agents\ConfirmacionAsistenciaAgent;
 use App\Application\Conversations\Agents\ConversationResetAgent;
 use App\Application\Conversations\Agents\GestionNegocioAgent;
 use App\Application\Conversations\Agents\GestionReservaAgent;
@@ -33,6 +36,7 @@ use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
 use App\Application\Conversations\Classification\DeterministicBusinessManagementStrategy;
+use App\Application\Conversations\Classification\PendingAttendanceConfirmationStrategy;
 use App\Application\Conversations\Classification\ResetKeywordStrategy;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\CacheConversationDraftRepository;
@@ -119,6 +123,11 @@ class AppServiceProvider extends ServiceProvider
                 $this->app->make(ResetKeywordStrategy::class),
                 $this->app->make(ButtonIntentStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
+                // Fase 3: después de continuidad a propósito — una
+                // conversación activa distinta tiene prioridad sobre un
+                // recordatorio, que es una espera pasiva (ver docblock de
+                // la propia strategy).
+                $this->app->make(PendingAttendanceConfirmationStrategy::class),
                 $this->app->make(AiIntentClassifierStrategy::class),
             ]);
         });
@@ -137,6 +146,7 @@ class AppServiceProvider extends ServiceProvider
                 Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
                 Intent::GestionNegocio->value => $this->app->make(GestionNegocioAgent::class),
                 Intent::InfoNegocio->value => $this->app->make(InfoNegocioAgent::class),
+                Intent::ConfirmacionAsistencia->value => $this->app->make(ConfirmacionAsistenciaAgent::class),
             ]);
         });
     }
@@ -181,6 +191,13 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(BookingConfirmed::class, SendProfessionalBookingConfirmationNotification::class);
         Event::listen(BookingCancelled::class, SendProfessionalBookingCancellationNotification::class);
         Event::listen(BookingRescheduled::class, SendProfessionalBookingRescheduleNotification::class);
+
+        // Fase 3: confirmación de asistencia — reaccionan solo cuando la
+        // cancelación/reprogramación está correlacionada con un "No"
+        // respondido a un recordatorio (PendingAttendanceConfirmation.declined_at),
+        // no-op en cualquier otro caso. Ver docblock de cada listener.
+        Event::listen(BookingCancelled::class, RecordAttendanceDeclineOnBookingCancelled::class);
+        Event::listen(BookingRescheduled::class, CleanupPendingAttendanceConfirmationOnBookingRescheduled::class);
     }
 
     /**
