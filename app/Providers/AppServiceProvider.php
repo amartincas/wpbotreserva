@@ -5,6 +5,9 @@ namespace App\Providers;
 use App\Application\Booking\Listeners\SendBookingCancellationNotification;
 use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
 use App\Application\Booking\Listeners\SendBookingRescheduleNotification;
+use App\Application\Booking\Listeners\SendProfessionalBookingCancellationNotification;
+use App\Application\Booking\Listeners\SendProfessionalBookingConfirmationNotification;
+use App\Application\Booking\Listeners\SendProfessionalBookingRescheduleNotification;
 use App\Application\Channels\PhoneNumberIdChannelResolver;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\ChannelResolverInterface;
@@ -170,6 +173,14 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(BookingConfirmed::class, SendBookingConfirmationNotification::class);
         Event::listen(BookingCancelled::class, SendBookingCancellationNotification::class);
         Event::listen(BookingRescheduled::class, SendBookingRescheduleNotification::class);
+
+        // Fase 2B: notificación al profesional (Resource.contact_phone),
+        // agregada como un segundo listener por evento — los 3 de arriba
+        // (cliente) quedan intactos, sin ninguna dependencia entre ambos
+        // pares.
+        Event::listen(BookingConfirmed::class, SendProfessionalBookingConfirmationNotification::class);
+        Event::listen(BookingCancelled::class, SendProfessionalBookingCancellationNotification::class);
+        Event::listen(BookingRescheduled::class, SendProfessionalBookingRescheduleNotification::class);
     }
 
     /**
