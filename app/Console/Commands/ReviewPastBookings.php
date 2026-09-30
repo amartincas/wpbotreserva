@@ -165,7 +165,7 @@ class ReviewPastBookings extends Command
         return [
             $booking->customer->name ?? $booking->customer->phone->value(),
             $booking->service->name,
-            $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+            $booking->starts_at->setTimezone($booking->organization->timezone)->translatedFormat('l d/m/Y H:i'),
             (string) $booking->id,
         ];
     }

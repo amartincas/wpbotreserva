@@ -1,13 +1,14 @@
 <?php
 
+use App\Application\Booking\Agenda\AgendaQueryService;
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\ConfirmBookingCommand;
-use App\Application\Booking\MarkBookingNoShowCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
+use App\Application\Booking\MarkBookingNoShowCommand;
+use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
-use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -104,6 +105,7 @@ function buildAdminCommandAgent(array &$sent): AdminCommandAgent
         new CancelBookingCommand(app(BookingSchedulerInterface::class)),
         new ConfirmBookingCommand(app(BookingSchedulerInterface::class)),
         new MarkBookingNoShowCommand(app(BookingSchedulerInterface::class)),
+        new AgendaQueryService,
     );
 }
 
@@ -145,6 +147,31 @@ test('"reservas dd/mm/aaaa" lista las reservas de esa fecha específica, no las 
 
     expect($sent[0]['message'])->toContain('11:00');
     expect($sent[0]['message'])->not->toContain('10:00');
+});
+
+/**
+ * Corrección AdminCommandAgent/timezone: listForRequestedDate() construía
+ * CarbonImmutable::create() sin Organization.timezone — la fecha explícita
+ * quedaba interpretada en config('app.timezone'), no en el timezone del
+ * negocio. adminAgentFixtureOrganization() ya usa un horario ACOTADO
+ * (09:00-17:00), necesario para que este defecto sea detectable (con un
+ * recurso 24h no se manifiesta). Tiempo real + offset grande, sin
+ * setTestNow().
+ */
+test('"reservas dd/mm/aaaa" con Organization en timezone distinto al servidor encuentra la reserva del día calendario correcto', function () {
+    $organization = adminAgentFixtureOrganization('wamid-admin-agent-tz');
+    $organization->update(['timezone' => 'Asia/Tokyo']);
+    $organization = $organization->fresh();
+    $target = CarbonImmutable::now('Asia/Tokyo')->addDays(10)->setTime(10, 0);
+    adminAgentFixtureBooking($organization, $target);
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $agent->handle(adminAgentFixtureMessage('reservas '.$target->format('d/m/Y')), $session, $organization);
+
+    expect($sent[0]['message'])->not->toContain('No tenés reservas');
+    expect($sent[0]['message'])->toContain('10:00');
 });
 
 test('"reservas hoy"/"reservas dd/mm/aaaa" nunca listan una reserva cancelada', function () {

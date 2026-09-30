@@ -20,6 +20,7 @@ use App\Application\Contracts\IntentClassifierInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
+use App\Application\Conversations\Agents\AgendaProfesionalAgent;
 use App\Application\Conversations\Agents\BookingChoiceAgent;
 use App\Application\Conversations\Agents\ConfirmacionAsistenciaAgent;
 use App\Application\Conversations\Agents\ConversationResetAgent;
@@ -35,6 +36,7 @@ use App\Application\Conversations\Classification\ButtonIntentStrategy;
 use App\Application\Conversations\Classification\CompositeIntentClassifier;
 use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
+use App\Application\Conversations\Classification\DeterministicAgendaProfesionalStrategy;
 use App\Application\Conversations\Classification\DeterministicBusinessManagementStrategy;
 use App\Application\Conversations\Classification\PendingAttendanceConfirmationStrategy;
 use App\Application\Conversations\Classification\ResetKeywordStrategy;
@@ -120,6 +122,11 @@ class AppServiceProvider extends ServiceProvider
             return new CompositeIntentClassifier([
                 $this->app->make(DeterministicAdminCommandStrategy::class),
                 $this->app->make(DeterministicBusinessManagementStrategy::class),
+                // Fase 4: junto al resto del clúster determinista del
+                // dueño/profesional, antes de continuidad — un comando de
+                // agenda del profesional interrumpe cualquier flujo activo a
+                // propósito, mismo criterio que AdminCommand.
+                $this->app->make(DeterministicAgendaProfesionalStrategy::class),
                 $this->app->make(ResetKeywordStrategy::class),
                 $this->app->make(ButtonIntentStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
@@ -147,6 +154,7 @@ class AppServiceProvider extends ServiceProvider
                 Intent::GestionNegocio->value => $this->app->make(GestionNegocioAgent::class),
                 Intent::InfoNegocio->value => $this->app->make(InfoNegocioAgent::class),
                 Intent::ConfirmacionAsistencia->value => $this->app->make(ConfirmacionAsistenciaAgent::class),
+                Intent::AgendaProfesional->value => $this->app->make(AgendaProfesionalAgent::class),
             ]);
         });
     }

@@ -34,7 +34,7 @@ class SendBookingConfirmationNotification implements ShouldQueue
         return sprintf(
             "✅ ¡Reserva confirmada!\n\n%s\n📅 %s\n\nSi necesitas cancelar o reprogramar, escríbenos por acá.",
             $booking->service->name,
-            $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+            $booking->starts_at->setTimezone($booking->organization->timezone)->translatedFormat('l d/m/Y H:i'),
         );
     }
 }

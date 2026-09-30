@@ -33,8 +33,8 @@ class SendBookingRescheduleNotification implements ShouldQueue
         return sprintf(
             "🔄 Tu reserva fue reprogramada.\n\n%s\nAntes: %s\nAhora: %s",
             $booking->service->name,
-            $previousStartsAt->translatedFormat('l d/m/Y H:i'),
-            $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+            $previousStartsAt->setTimezone($booking->organization->timezone)->translatedFormat('l d/m/Y H:i'),
+            $booking->starts_at->setTimezone($booking->organization->timezone)->translatedFormat('l d/m/Y H:i'),
         );
     }
 }

@@ -60,9 +60,6 @@ class GestionReservaAgent implements AgentInterface
         ['id' => 'no', 'title' => 'No'],
     ];
 
-    /** @var FlowStep[] */
-    private readonly array $rescheduleSteps;
-
     public function __construct(
         private readonly ConversationalFlowRunner $runner,
         private readonly ConversationDraftRepositoryInterface $drafts,
@@ -71,13 +68,22 @@ class GestionReservaAgent implements AgentInterface
         private readonly ActiveBookingsFinderInterface $activeBookings,
         private readonly CancelBookingCommand $cancelBooking,
         private readonly RescheduleBookingCommand $rescheduleBooking,
-        AiServiceInterface $ai,
-    ) {
-        $this->rescheduleSteps = [
+        private readonly AiServiceInterface $ai,
+    ) {}
+
+    /**
+     * Construido por mensaje, nunca en el constructor — mismo motivo que
+     * ReservaAgent::steps() (corrección transversal de timezone).
+     *
+     * @return FlowStep[]
+     */
+    private function rescheduleSteps(string $timezone): array
+    {
+        return [
             new FlowStep(
                 'newDate',
                 fn () => '¿Para qué día querés mover el turno?',
-                new DateFieldExtractor($ai),
+                new DateFieldExtractor($this->ai, $timezone),
             ),
         ];
     }
@@ -152,7 +158,7 @@ class GestionReservaAgent implements AgentInterface
             '_candidateBookingIds' => $activeBookings->pluck('id')->all(),
         ];
         $this->drafts->put($session, $draft);
-        $this->reply($organization, $message->fromPhone, $this->formatBookingOptions($activeBookings));
+        $this->reply($organization, $message->fromPhone, $this->formatBookingOptions($activeBookings, $organization));
     }
 
     /**
@@ -190,7 +196,7 @@ class GestionReservaAgent implements AgentInterface
         $this->notifications->sendButtons($organization, $toPhone, sprintf(
             "Tenés un turno de %s el %s.\n\n¿Qué querés hacer?",
             $booking->service->name,
-            $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+            $booking->starts_at->setTimezone($organization->timezone)->translatedFormat('l d/m/Y H:i'),
         ), self::ACTION_BUTTONS);
     }
 
@@ -209,7 +215,7 @@ class GestionReservaAgent implements AgentInterface
                 'Tu turno de %s está %s para el %s.',
                 $booking->service->name,
                 $this->statusLabel($booking->status),
-                $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+                $booking->starts_at->setTimezone($organization->timezone)->translatedFormat('l d/m/Y H:i'),
             ));
 
             return;
@@ -221,7 +227,7 @@ class GestionReservaAgent implements AgentInterface
             $this->drafts->put($session, $draft);
             $this->replyYesNo($organization, $message->fromPhone, sprintf(
                 '¿Confirmás que querés cancelar tu turno del %s?',
-                $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+                $booking->starts_at->setTimezone($organization->timezone)->translatedFormat('l d/m/Y H:i'),
             ));
 
             return;
@@ -231,7 +237,8 @@ class GestionReservaAgent implements AgentInterface
             $draft['_awaiting_action'] = false;
             $draft['_awaiting_new_date'] = true;
             $this->drafts->put($session, $draft);
-            $this->reply($organization, $message->fromPhone, ($this->rescheduleSteps[0]->prompt)($draft));
+            $steps = $this->rescheduleSteps($organization->timezone);
+            $this->reply($organization, $message->fromPhone, ($steps[0]->prompt)($draft));
 
             return;
         }
@@ -265,8 +272,9 @@ class GestionReservaAgent implements AgentInterface
      */
     private function handleNewDateAnswer(InboundMessage $message, ConversationSession $session, Organization $organization, array $draft): void
     {
-        $result = $this->rescheduleSteps[0]->extractor->extract($message->text, $draft);
-        $progress = $this->runner->advance($this->rescheduleSteps, $draft, $this->rescheduleSteps[0], $result);
+        $steps = $this->rescheduleSteps($organization->timezone);
+        $result = $steps[0]->extractor->extract($message->text, $draft);
+        $progress = $this->runner->advance($steps, $draft, $steps[0], $result);
 
         if ($progress->status === FlowProgressStatus::Invalid) {
             $this->reply($organization, $message->fromPhone, $progress->reason);
@@ -362,13 +370,13 @@ class GestionReservaAgent implements AgentInterface
     /**
      * @param  Collection<int, Booking>  $bookings
      */
-    private function formatBookingOptions(Collection $bookings): string
+    private function formatBookingOptions(Collection $bookings, Organization $organization): string
     {
         $bookings->first()->loadMissing('service');
-        $options = $bookings->map(function (Booking $booking, int $i) {
+        $options = $bookings->map(function (Booking $booking, int $i) use ($organization) {
             $booking->loadMissing('service');
 
-            return ($i + 1).') '.$booking->service->name.' — '.$booking->starts_at->translatedFormat('l d/m H:i');
+            return ($i + 1).') '.$booking->service->name.' — '.$booking->starts_at->setTimezone($organization->timezone)->translatedFormat('l d/m H:i');
         })->implode("\n");
 
         return "Tenés varias reservas activas:\n\n{$options}\n\nRespondé con el número de la que querés gestionar.";

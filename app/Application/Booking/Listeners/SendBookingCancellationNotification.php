@@ -32,7 +32,7 @@ class SendBookingCancellationNotification implements ShouldQueue
         return sprintf(
             "❌ Tu reserva fue cancelada.\n\n%s\n📅 %s\n\nSi querés agendar un nuevo turno, escríbenos por acá.",
             $booking->service->name,
-            $booking->starts_at->translatedFormat('l d/m/Y H:i'),
+            $booking->starts_at->setTimezone($booking->organization->timezone)->translatedFormat('l d/m/Y H:i'),
         );
     }
 }

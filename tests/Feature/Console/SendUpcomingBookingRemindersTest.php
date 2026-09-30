@@ -97,6 +97,32 @@ afterEach(function () {
     CarbonImmutable::setTestNow();
 });
 
+/**
+ * Corrección de presentación de timezone: la ventana temporal (23-24h) no
+ * se toca — sigue calculándose con now() del servidor, solo cambia cómo se
+ * MUESTRA la fecha/hora en la plantilla. 08:30 (crudo, dentro de la
+ * ventana fijada por el beforeEach) equivale a 22:30 el mismo día en
+ * Asia/Tokyo (14h adelantado) — sin la conversión, el mensaje llevaría
+ * "08:30", nunca "22:30". Mismo beforeEach ya existente (setTestNow sin
+ * timezone explícito, coincide con config('app.timezone') — no reproduce
+ * el quirk).
+ */
+test('el recordatorio muestra la fecha/hora en el timezone de la Organization, no en el del servidor', function () {
+    $organization = upcomingReminderFixtureOrganization('wamid-upcoming-reminder-tz');
+    $organization->update(['timezone' => 'Asia/Tokyo']);
+    $organization = $organization->fresh();
+    $booking = upcomingReminderFixtureBooking($organization, CarbonImmutable::parse('2026-08-22 08:30:00'));
+
+    $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
+
+    expect($this->sent)->toHaveCount(1);
+    expect($this->sent[0]['bodyParameters'])->toBe([
+        'Corte de cabello',
+        '22/08/2026',
+        '22:30',
+    ]);
+});
+
 test('una reserva a ~23.5h manda el recordatorio de confirmación de asistencia con los datos correctos', function () {
     $organization = upcomingReminderFixtureOrganization();
     $booking = upcomingReminderFixtureBooking($organization, now()->addHours(23)->addMinutes(30));

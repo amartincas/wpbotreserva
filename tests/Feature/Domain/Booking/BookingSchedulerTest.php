@@ -66,6 +66,160 @@ function schedulerFor(): BookingScheduler
     return new BookingScheduler(new AvailabilityCalculator);
 }
 
+/**
+ * Corrección de timezone en disponibilidad — mismo patrón que
+ * schedulerFixtures(), con Organization.timezone explícito y horario del
+ * recurso ACOTADO (nunca 24h, que enmascararía el bug). $startTime/$endTime
+ * son horas LOCALES de Organization, exactamente como las entendería el
+ * dueño del negocio al configurar su horario.
+ */
+function schedulerFixturesWithOrgTimezone(string $timezone, string $startTime = '09:00', string $endTime = '17:00', int $resourceCount = 1): array
+{
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'timezone' => $timezone]);
+    $location = Location::create(['organization_id' => $org->id, 'name' => 'Sede Chapinero']);
+    $svc = Service::create([
+        'organization_id' => $org->id,
+        'name' => 'Corte de cabello',
+        'duration_minutes' => 30,
+    ]);
+    ServiceResourceRequirement::create(['service_id' => $svc->id, 'resource_type' => ResourceType::HUMAN, 'quantity' => 1]);
+
+    $resources = collect(range(1, $resourceCount))->map(function ($i) use ($org, $location, $svc, $startTime, $endTime, $timezone) {
+        $resource = Resource::create([
+            'organization_id' => $org->id,
+            'location_id' => $location->id,
+            'resource_type' => ResourceType::HUMAN,
+            'display_name' => "Estilista {$i}",
+        ]);
+        $svc->resources()->attach($resource->id);
+        // weekday se calcula en timezone de Organization a propósito: es el
+        // mismo criterio que usaría el dueño al configurar "lunes 9 a 17".
+        ResourceSchedule::create([
+            'resource_id' => $resource->id,
+            'weekday' => CarbonImmutable::parse('2026-09-07 12:00:00', $timezone)->dayOfWeek,
+            'start_time' => $startTime,
+            'end_time' => $endTime,
+        ]);
+
+        return $resource;
+    });
+
+    $customer = Customer::create(['organization_id' => $org->id, 'phone' => '+573001234567']);
+
+    return compact('org', 'location', 'svc', 'resources', 'customer') + ['resource' => $resources->first()];
+}
+
+/**
+ * Instante local de Organization, ya normalizado a config('app.timezone')
+ * — replica exactamente lo que CreateBookingCommand/RescheduleBookingCommand
+ * entregan a BookingScheduler en producción.
+ */
+function schedulerNormalizedInstant(string $localDateTime, string $timezone): CarbonImmutable
+{
+    return CarbonImmutable::parse($localDateTime, $timezone)->setTimezone(config('app.timezone'));
+}
+
+test('Ejemplo obligatorio: Asia/Tokyo, Resource 09:00-17:00, reserva 09:00 Tokyo se crea y persiste el mismo instante', function () {
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '09:00', '17:00');
+    $localInstant = CarbonImmutable::parse('2026-09-07 09:00:00', 'Asia/Tokyo');
+    $startsAt = $localInstant->setTimezone(config('app.timezone'));
+
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $startsAt, $f['resource']);
+
+    expect($booking->exists)->toBeTrue();
+    // Mismo instante real, sin importar en qué timezone se compare.
+    expect($booking->starts_at->equalTo($localInstant))->toBeTrue();
+    expect($booking->starts_at->setTimezone('Asia/Tokyo')->format('H:i'))->toBe('09:00');
+});
+
+test('America/New_York, Resource 09:00-17:00, reserva válida se crea', function () {
+    $f = schedulerFixturesWithOrgTimezone('America/New_York', '09:00', '17:00');
+    $startsAt = schedulerNormalizedInstant('2026-09-07 09:00:00', 'America/New_York');
+
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $startsAt, $f['resource']);
+
+    expect($booking->exists)->toBeTrue();
+    expect($booking->starts_at->setTimezone('America/New_York')->format('H:i'))->toBe('09:00');
+});
+
+test('fuera del horario local de Organization sigue rechazándose correctamente (el fix no vuelve todo disponible)', function () {
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '09:00', '17:00');
+    $outsideLocalHours = schedulerNormalizedInstant('2026-09-07 20:00:00', 'Asia/Tokyo'); // 20:00 Tokio, fuera de 09-17
+
+    expect(fn () => schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $outsideLocalHours, $f['resource']))
+        ->toThrow(SlotNoLongerAvailableException::class);
+});
+
+test('Organization cuya fecha local difiere de la fecha de config(app.timezone): se valida contra el día local de Organization', function () {
+    // 10:00 Asia/Tokyo del 07/09, normalizado a config('app.timezone')
+    // (America/Bogota, 14h detrás), cae el 06/09 20:00 — un día calendario
+    // ANTERIOR al de Organization. Si BookingScheduler recalculara la
+    // ventana de horario usando el día de Bogota (06/09) en vez del de
+    // Organization (07/09), podría aplicar un ResourceSchedule de un
+    // weekday distinto (o ninguno) — este test prueba que el día que
+    // importa es el de Organization.
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '09:00', '17:00');
+    $localInstant = CarbonImmutable::parse('2026-09-07 10:00:00', 'Asia/Tokyo');
+    $startsAt = $localInstant->setTimezone(config('app.timezone'));
+
+    // Confirma la premisa del caso: normalizado a Bogota, esto cae en el
+    // día CALENDARIO anterior al de Organization.
+    expect($startsAt->toDateString())->not->toBe($localInstant->toDateString());
+
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $startsAt, $f['resource']);
+
+    expect($booking->exists)->toBeTrue();
+    expect($booking->starts_at->equalTo($localInstant))->toBeTrue();
+});
+
+test('reprogramación con timezone no-default y Resource de horario acotado funciona', function () {
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '09:00', '17:00');
+    $originalStart = schedulerNormalizedInstant('2026-09-07 09:00:00', 'Asia/Tokyo');
+    $newLocalStart = CarbonImmutable::parse('2026-09-07 11:00:00', 'Asia/Tokyo');
+    $newStart = $newLocalStart->setTimezone(config('app.timezone'));
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $originalStart, $f['resource']);
+
+    $rescheduled = schedulerFor()->reschedule($booking, $newStart);
+
+    expect($rescheduled->starts_at->equalTo($newLocalStart))->toBeTrue();
+    expect($rescheduled->starts_at->setTimezone('Asia/Tokyo')->format('H:i'))->toBe('11:00');
+});
+
+test('reprogramar fuera del horario local de Organization sigue rechazándose', function () {
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '09:00', '17:00');
+    $originalStart = schedulerNormalizedInstant('2026-09-07 09:00:00', 'Asia/Tokyo');
+    $outsideLocalHours = schedulerNormalizedInstant('2026-09-07 20:00:00', 'Asia/Tokyo');
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $originalStart, $f['resource']);
+
+    expect(fn () => schedulerFor()->reschedule($booking, $outsideLocalHours))
+        ->toThrow(SlotNoLongerAvailableException::class);
+});
+
+test('caso límite cercano a medianoche local de Organization: el último slot válido del día se acepta', function () {
+    // Horario 23:00-23:59 local de Organization, servicio de 30 min — un
+    // único slot posible, 23:00-23:30, deliberadamente pegado a la
+    // medianoche para forzar el cruce de día calendario al normalizar.
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '23:00', '23:59');
+    $localInstant = CarbonImmutable::parse('2026-09-07 23:00:00', 'Asia/Tokyo');
+    $startsAt = $localInstant->setTimezone(config('app.timezone'));
+
+    $booking = schedulerFor()->schedule($f['svc'], $f['location'], $f['customer'], $startsAt, $f['resource']);
+
+    expect($booking->exists)->toBeTrue();
+    expect($booking->starts_at->equalTo($localInstant))->toBeTrue();
+});
+
+test('AvailabilityCalculator::availableSlots() sigue generando los slots en timezone de Organization, sin cambios', function () {
+    $f = schedulerFixturesWithOrgTimezone('Asia/Tokyo', '09:00', '17:00');
+    $localDate = CarbonImmutable::parse('2026-09-07 00:00:00', 'Asia/Tokyo');
+
+    $slots = (new AvailabilityCalculator)->availableSlots($f['svc'], $f['location'], $localDate, $f['resource']);
+
+    expect($slots->first()->range->start->format('H:i'))->toBe('09:00');
+    expect($slots->first()->range->start->timezoneName)->toBe('Asia/Tokyo');
+    expect($slots->last()->range->end->format('H:i'))->toBe('17:00');
+});
+
 test('una reserva exitosa crea Booking + BookingResource, snapshotea datos y dispara BookingConfirmed', function () {
     Event::fake([BookingConfirmed::class]);
     $f = schedulerFixtures();

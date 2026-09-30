@@ -48,9 +48,6 @@ class ReservaAgent implements AgentInterface
 {
     private const CONFIRMATION_WORDS = ['si', 'sí', 'confirmo', 'dale', 'ok', 'okay'];
 
-    /** @var FlowStep[] */
-    private readonly array $steps;
-
     public function __construct(
         private readonly ConversationalFlowRunner $runner,
         private readonly ConversationDraftRepositoryInterface $drafts,
@@ -58,18 +55,29 @@ class ReservaAgent implements AgentInterface
         private readonly NotificationSenderInterface $notifications,
         private readonly AvailabilityCalculatorInterface $availability,
         private readonly CreateBookingCommand $createBooking,
-        AiServiceInterface $ai,
-    ) {
-        $this->steps = [
+        private readonly AiServiceInterface $ai,
+    ) {}
+
+    /**
+     * Construido por mensaje, nunca en el constructor — el timezone de la
+     * Organization recién se conoce en handle() (corrección transversal de
+     * timezone: DateFieldExtractor no puede fijar "hoy" antes de saber a
+     * qué Organization pertenece el mensaje).
+     *
+     * @return FlowStep[]
+     */
+    private function steps(string $timezone): array
+    {
+        return [
             new FlowStep(
                 'date',
                 fn () => '¿Para qué día querés el turno?',
-                new DateFieldExtractor($ai),
+                new DateFieldExtractor($this->ai, $timezone),
             ),
             new FlowStep(
                 'customerName',
                 fn () => '¿A nombre de quién hago la reserva?',
-                new AiFieldExtractor($ai, 'nombre del cliente', 'El nombre de la persona que va a usar el turno.'),
+                new AiFieldExtractor($this->ai, 'nombre del cliente', 'El nombre de la persona que va a usar el turno.'),
             ),
         ];
     }
@@ -77,6 +85,7 @@ class ReservaAgent implements AgentInterface
     public function handle(InboundMessage $message, ConversationSession $session, Organization $organization): void
     {
         $draft = $this->drafts->get($session);
+        $steps = $this->steps($organization->timezone);
 
         if (($draft['_awaiting_confirmation'] ?? false) === true) {
             $this->handleConfirmationReply($message, $session, $organization, $draft);
@@ -110,13 +119,13 @@ class ReservaAgent implements AgentInterface
 
             $draft['_started'] = true;
             $this->drafts->put($session, $draft);
-            $firstStep = $this->runner->currentStep($this->steps, $draft);
+            $firstStep = $this->runner->currentStep($steps, $draft);
             $this->reply($organization, $message->fromPhone, ($firstStep->prompt)($draft));
 
             return;
         }
 
-        $currentStep = $this->runner->currentStep($this->steps, $draft);
+        $currentStep = $this->runner->currentStep($steps, $draft);
 
         if ($currentStep === null) {
             $this->offerSlots($session, $organization, $draft);
@@ -125,7 +134,7 @@ class ReservaAgent implements AgentInterface
         }
 
         $result = $currentStep->extractor->extract($message->text, $draft);
-        $progress = $this->runner->advance($this->steps, $draft, $currentStep, $result);
+        $progress = $this->runner->advance($steps, $draft, $currentStep, $result);
 
         match ($progress->status) {
             FlowProgressStatus::Invalid => $this->reply($organization, $message->fromPhone, $progress->reason),
@@ -175,7 +184,7 @@ class ReservaAgent implements AgentInterface
         $draft['_started'] = true;
         $this->drafts->put($session, $draft);
 
-        $nextStep = $this->runner->currentStep($this->steps, $draft);
+        $nextStep = $this->runner->currentStep($this->steps($organization->timezone), $draft);
 
         if ($nextStep === null) {
             $this->offerSlots($session, $organization, $draft);

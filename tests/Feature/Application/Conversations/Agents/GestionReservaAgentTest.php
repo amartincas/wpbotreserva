@@ -16,6 +16,7 @@ use App\Application\Tenancy\ServiceRegistrationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Booking\Booking;
+use App\Domain\Booking\Contracts\ActiveBookingsFinderInterface;
 use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
 use App\Domain\Conversational\ConversationSession;
@@ -168,7 +169,7 @@ function buildGestionReservaAgent(ConversationDraftRepositoryInterface $drafts, 
         $drafts,
         gestionFakeNotificationSender($sent),
         app(AvailabilityCalculatorInterface::class),
-        app(App\Domain\Booking\Contracts\ActiveBookingsFinderInterface::class),
+        app(ActiveBookingsFinderInterface::class),
         new CancelBookingCommand(app(BookingSchedulerInterface::class)),
         new RescheduleBookingCommand(app(BookingSchedulerInterface::class)),
         $ai,
@@ -186,6 +187,50 @@ test('sin reservas activas, avisa que no tiene ninguna y no llama a la IA', func
 
     expect($sent)->toHaveCount(1);
     expect($sent[0]['message'])->toContain('No tenés ninguna reserva');
+});
+
+/**
+ * Corrección de presentación de timezone: creación real vía
+ * CreateBookingCommand (ya normaliza a config('app.timezone') al
+ * persistir) con un horario en Asia/Tokyo (9am local, 14h adelantado a
+ * America/Bogota) — sin la conversión en presentBookingAndAskAction(), el
+ * mensaje mostraría "19:00" (equivalente Bogota) en vez de "09:00"
+ * (Tokio). Tiempo real + offset grande, sin setTestNow.
+ *
+ * Horario del recurso abierto las 24h (a diferencia de gestionFixtureOrganization,
+ * 9-17h) — necesario para que la re-verificación de disponibilidad de
+ * BookingScheduler, que corre sobre el starts_at ya normalizado a
+ * config('app.timezone'), no rechace un horario que en términos de
+ * Organization sí es válido (limitación arquitectónica ya conocida,
+ * ajena a esta corrección de presentación).
+ */
+test('con una sola reserva activa y Organization en timezone distinto al servidor, muestra la hora local del negocio', function () {
+    $channel = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API, 'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-gestion-tz', 'status' => ChannelStatus::ACTIVE,
+    ]);
+    $result = (new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class)))->handle(new RegisterOrganizationData(
+        organizationName: 'Barbería Don Carlos', ownerPhone: '+573009999999', channel: $channel,
+        city: 'Bogotá', address: 'Cra 7 # 45-12',
+        services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
+        resources: [new ResourceRegistrationData('Carlos', array_map(
+            fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '00:00', endTime: '23:59'),
+            range(0, 6)
+        ))],
+    ));
+    $organization = Organization::findOrFail($result->organizationId);
+    $organization->update(['timezone' => 'Asia/Tokyo']);
+    $organization = $organization->fresh();
+    gestionFixtureBooking($organization, '+573001234567', CarbonImmutable::now('Asia/Tokyo')->addDays(5)->setTime(9, 0));
+    $session = gestionFixtureSession($organization);
+    $drafts = gestionFakeDraftRepository();
+    $sent = [];
+    $agent = buildGestionReservaAgent($drafts, $sent, gestionNeverCalledAi());
+
+    $agent->handle(gestionFixtureMessage('quiero ver mi turno'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('09:00');
+    expect($sent[0]['message'])->not->toContain('19:00');
 });
 
 test('con una sola reserva activa, la presenta directo y pregunta qué acción', function () {

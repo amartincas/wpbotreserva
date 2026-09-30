@@ -66,8 +66,8 @@ class SendUpcomingBookingReminders extends Command
                     self::TEMPLATE_LANGUAGE,
                     [
                         $booking->service->name,
-                        $booking->starts_at->format('d/m/Y'),
-                        $booking->starts_at->format('H:i'),
+                        $booking->starts_at->setTimezone($booking->organization->timezone)->format('d/m/Y'),
+                        $booking->starts_at->setTimezone($booking->organization->timezone)->format('H:i'),
                     ],
                 );
             } catch (NotificationDeliveryException $e) {

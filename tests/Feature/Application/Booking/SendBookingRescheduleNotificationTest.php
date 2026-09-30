@@ -5,9 +5,9 @@ use App\Application\Contracts\NotificationSenderInterface;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Events\BookingRescheduled;
 use App\Domain\CRM\Customer;
+use App\Domain\Scheduling\Service;
 use App\Domain\Tenancy\Location;
 use App\Domain\Tenancy\Organization;
-use App\Domain\Scheduling\Service;
 use App\Enums\BookingStatus;
 use Carbon\CarbonImmutable;
 
@@ -45,4 +45,46 @@ test('handle() manda la notificación de reprogramación con la fecha anterior y
     expect($sent[0]['message'])->toContain('Corte');
     expect($sent[0]['message'])->toContain('10:00');
     expect($sent[0]['message'])->toContain('11:00');
+});
+
+/**
+ * Corrección de presentación de timezone — tanto la fecha anterior
+ * (evento, capturada antes de reprogramar) como la nueva (booking
+ * persistido) deben convertirse al timezone de la Organization. 20:00/21:00
+ * Bogota equivalen a 10:00/11:00 del día siguiente en Asia/Tokyo.
+ * Determinista, sin setTestNow.
+ */
+test('el mensaje muestra ambas horas (anterior y nueva) en el timezone de la Organization', function () {
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'timezone' => 'Asia/Tokyo']);
+    $location = Location::create(['organization_id' => $org->id, 'name' => 'Sede']);
+    $service = Service::create(['organization_id' => $org->id, 'name' => 'Corte', 'duration_minutes' => 30]);
+    $customer = Customer::create(['organization_id' => $org->id, 'phone' => '+573001234567', 'name' => 'Ana']);
+    $booking = Booking::create([
+        'organization_id' => $org->id, 'location_id' => $location->id, 'service_id' => $service->id,
+        'customer_id' => $customer->id, 'starts_at' => '2026-09-07 21:00:00', 'ends_at' => '2026-09-07 21:30:00',
+        'duration_minutes' => 30, 'status' => BookingStatus::CONFIRMED,
+    ]);
+    $previousStartsAt = CarbonImmutable::parse('2026-09-07 20:00:00');
+
+    $sent = [];
+    $fakeSender = new class($sent) implements NotificationSenderInterface
+    {
+        public function __construct(private array &$sharedRef) {}
+
+        public function send($organization, string $toPhoneE164, string $message): void
+        {
+            $this->sharedRef[] = compact('organization', 'toPhoneE164', 'message');
+        }
+
+        public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons($organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
+    };
+
+    (new SendBookingRescheduleNotification($fakeSender))->handle(new BookingRescheduled($booking, $previousStartsAt));
+
+    expect($sent[0]['message'])->toContain('10:00');
+    expect($sent[0]['message'])->toContain('11:00');
+    expect($sent[0]['message'])->not->toContain('20:00');
+    expect($sent[0]['message'])->not->toContain('21:00');
 });

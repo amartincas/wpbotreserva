@@ -39,6 +39,7 @@ class DateFieldExtractor implements FieldExtractorInterface
 {
     public function __construct(
         private readonly AiServiceInterface $ai,
+        private readonly string $timezone,
         private readonly ?BotMessageRepository $botMessages = null,
     ) {}
 
@@ -56,7 +57,7 @@ class DateFieldExtractor implements FieldExtractorInterface
             );
         }
 
-        $today = now()->toDateString();
+        $today = CarbonImmutable::now($this->timezone)->toDateString();
 
         $systemPrompt = <<<PROMPT
             Hoy es {$today}. Extraé EXCLUSIVAMENTE la fecha a la que se refiere el mensaje del usuario (el día que quiere el turno).
@@ -92,12 +93,12 @@ class DateFieldExtractor implements FieldExtractorInterface
         }
 
         try {
-            $date = CarbonImmutable::createFromFormat('Y-m-d', $response)->startOfDay();
+            $date = CarbonImmutable::createFromFormat('Y-m-d', $response, $this->timezone)->startOfDay();
         } catch (Throwable) {
             return $this->failure();
         }
 
-        if ($date->isBefore(now()->startOfDay())) {
+        if ($date->isBefore(CarbonImmutable::now($this->timezone)->startOfDay())) {
             return FieldExtractionResult::failure($this->pastDateMessage());
         }
 
@@ -183,7 +184,7 @@ class DateFieldExtractor implements FieldExtractorInterface
     private function resolveNextWeekday(int $isoWeekday): FieldExtractionResult
     {
         return FieldExtractionResult::success(
-            CarbonImmutable::now()->startOfDay()->next($isoWeekday)
+            CarbonImmutable::now($this->timezone)->startOfDay()->next($isoWeekday)
         );
     }
 
@@ -196,7 +197,7 @@ class DateFieldExtractor implements FieldExtractorInterface
      */
     private function resolveWeekdayWithDayOfMonth(int $isoWeekday, int $dayOfMonth): FieldExtractionResult
     {
-        $cursor = CarbonImmutable::now()->startOfDay();
+        $cursor = CarbonImmutable::now($this->timezone)->startOfDay();
         $limit = $cursor->addYears(2);
 
         while ($cursor->lessThanOrEqualTo($limit)) {
@@ -249,12 +250,12 @@ class DateFieldExtractor implements FieldExtractorInterface
             return null;
         }
 
-        return CarbonImmutable::createFromDate($year, $month, $day)->startOfDay();
+        return CarbonImmutable::createFromDate($year, $month, $day, $this->timezone)->startOfDay();
     }
 
     private function buildDateResult(CarbonImmutable $date): FieldExtractionResult
     {
-        if ($date->isBefore(CarbonImmutable::now()->startOfDay())) {
+        if ($date->isBefore(CarbonImmutable::now($this->timezone)->startOfDay())) {
             return FieldExtractionResult::failure($this->pastDateMessage());
         }
 

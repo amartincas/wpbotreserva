@@ -19,11 +19,22 @@ class CreateBookingCommand
     {
         $customer = $this->findOrCreateCustomer($data);
 
+        // Única frontera de normalización de timezone para creación
+        // (corrección transversal de timezone): $data->startsAt puede llegar
+        // con el timezone de la Organization todavía adjunto (resuelto por
+        // DateFieldExtractor) — se normaliza acá, antes de que
+        // BookingScheduler/Eloquent lo persistan, para que el instante se
+        // guarde de forma consistente con config('app.timezone') (mismo
+        // criterio que ya usan los listeners de Fase 2B al convertir para
+        // mostrar, pero acá para persistir). setTimezone() nunca cambia el
+        // instante real, solo la representación.
+        $startsAt = $data->startsAt->setTimezone(config('app.timezone'));
+
         $booking = $this->scheduler->schedule(
             $data->service,
             $data->location,
             $customer,
-            $data->startsAt,
+            $startsAt,
             $data->resource,
             $data->notes,
         );

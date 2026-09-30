@@ -2,6 +2,7 @@
 
 namespace App\Application\Conversations\Agents;
 
+use App\Application\Booking\Agenda\AgendaQueryService;
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\ConfirmBookingCommand;
 use App\Application\Booking\MarkBookingNoShowCommand;
@@ -12,7 +13,6 @@ use App\Domain\Booking\Exceptions\BookingAlreadyTerminalException;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Tenancy\Organization;
-use App\Enums\BookingStatus;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 
@@ -35,6 +35,7 @@ class AdminCommandAgent implements AgentInterface
         private readonly CancelBookingCommand $cancelBooking,
         private readonly ConfirmBookingCommand $confirmBooking,
         private readonly MarkBookingNoShowCommand $markNoShowBooking,
+        private readonly AgendaQueryService $agenda,
     ) {}
 
     public function handle(InboundMessage $message, ConversationSession $session, Organization $organization): void
@@ -42,7 +43,7 @@ class AdminCommandAgent implements AgentInterface
         $text = trim($message->text);
 
         if (preg_match('/^reservas\s+hoy$/iu', $text)) {
-            $this->listForDate($organization, $message->fromPhone, now()->toImmutable(), 'hoy');
+            $this->listForDate($organization, $message->fromPhone, CarbonImmutable::now($organization->timezone), 'hoy');
 
             return;
         }
@@ -91,21 +92,19 @@ class AdminCommandAgent implements AgentInterface
             return;
         }
 
-        $date = CarbonImmutable::create($year, $month, $day);
+        $date = CarbonImmutable::create($year, $month, $day, timezone: $organization->timezone);
 
         $this->listForDate($organization, $toPhone, $date, $date->format('d/m/Y'));
     }
 
+    /**
+     * Query delegada a AgendaQueryService (Fase 4) — mismo comportamiento
+     * observable de siempre (excluye CANCELLED, sin filtro de Resource),
+     * ahora compartido con AgendaProfesionalAgent en vez de duplicado.
+     */
     private function listForDate(Organization $organization, string $toPhone, CarbonImmutable $date, string $label): void
     {
-        // Excluye canceladas a propósito: caso real, el dueño vio una
-        // reserva que el cliente ya había cancelado listada igual que las
-        // vigentes, sin ninguna forma de distinguirla.
-        $bookings = $organization->bookings()
-            ->whereDate('starts_at', $date->toDateString())
-            ->where('status', '!=', BookingStatus::CANCELLED)
-            ->orderBy('starts_at')
-            ->get();
+        $bookings = $this->agenda->forDate($organization, $date);
 
         if ($bookings->isEmpty()) {
             $this->reply($organization, $toPhone, "No tenés reservas para {$label}.");
@@ -113,7 +112,7 @@ class AdminCommandAgent implements AgentInterface
             return;
         }
 
-        $this->reply($organization, $toPhone, "Reservas de {$label}:\n\n".$this->formatBookingList($bookings));
+        $this->reply($organization, $toPhone, "Reservas de {$label}:\n\n".$this->formatBookingList($bookings, $organization));
     }
 
     private function cancel(Organization $organization, string $toPhone, int $bookingId): void
@@ -190,14 +189,18 @@ class AdminCommandAgent implements AgentInterface
     /**
      * @param  Collection<int, Booking>  $bookings
      */
-    private function formatBookingList(Collection $bookings): string
+    private function formatBookingList(Collection $bookings, Organization $organization): string
     {
         $bookings->loadMissing(['service', 'customer']);
 
+        // setTimezone($organization->timezone) — corrección transversal de
+        // timezone: starts_at, releído desde la base, viene en
+        // config('app.timezone'), nunca en el timezone de la Organization;
+        // sin esto, la hora mostrada al dueño sería la del servidor.
         return $bookings->map(fn (Booking $booking) => sprintf(
             '#%d %s — %s (%s)',
             $booking->id,
-            $booking->starts_at->format('H:i'),
+            $booking->starts_at->setTimezone($organization->timezone)->format('H:i'),
             $booking->service->name,
             $booking->customer->name ?? $booking->customer->phone->value(),
         ))->implode("\n");

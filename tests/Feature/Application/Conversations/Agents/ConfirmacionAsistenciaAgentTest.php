@@ -379,6 +379,35 @@ test('reprogramación normal, sin recordatorio de por medio, es no-op para el li
 
 // --- 2+ pendientes ---
 
+/**
+ * Corrección de presentación de timezone: mismo criterio que el resto de
+ * esta corrección — 9am Tokio (14h adelantado a Bogota) equivale a 19:00
+ * del día anterior en Bogota; sin la conversión, el listado de
+ * desambiguación mostraría "19:00" en vez de "09:00". El recurso de
+ * confirmAttendanceFixtureOrganization ya está abierto 24h, sin ajuste
+ * adicional necesario. Tiempo real + offset grande, sin setTestNow.
+ */
+test('2+ pendientes con Organization en timezone distinto al servidor, el listado muestra la hora local del negocio', function () {
+    $organization = confirmAttendanceFixtureOrganization();
+    $organization->update(['timezone' => 'Asia/Tokyo']);
+    $organization = $organization->fresh();
+    $booking1 = confirmAttendanceFixtureBooking($organization, '+573001234567', CarbonImmutable::now('Asia/Tokyo')->addDays(5)->setTime(9, 0));
+    $booking2 = confirmAttendanceFixtureBooking($organization, '+573001234567', CarbonImmutable::now('Asia/Tokyo')->addDays(5)->setTime(11, 0));
+    confirmAttendancePendingFor($booking1);
+    confirmAttendancePendingFor($booking2);
+    $session = confirmAttendanceFixtureSession($organization);
+    $drafts = confirmAttendanceFakeDraftRepository();
+    $sent = [];
+    $agent = buildConfirmacionAsistenciaAgent($drafts, $sent);
+
+    $agent->handle(confirmAttendanceFixtureMessage('si'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('09:00');
+    expect($sent[0]['message'])->toContain('11:00');
+    expect($sent[0]['message'])->not->toContain('19:00');
+    expect($sent[0]['message'])->not->toContain('21:00');
+});
+
 test('2+ pendientes: pide desambiguación numerada, preserva _pendingAnswer, resuelve al Booking correcto', function () {
     $organization = confirmAttendanceFixtureOrganization();
     $booking1 = confirmAttendanceFixtureBooking($organization, '+573001234567', now()->addDay()->setTime(9, 0));

@@ -93,6 +93,26 @@ function reviewPastFixtureBooking(Organization $organization, CarbonImmutable $s
     return Booking::findOrFail($result->bookingId);
 }
 
+/**
+ * Corrección de presentación de timezone: la ventana temporal (vencida
+ * hace 2 días) no se toca, solo cómo se muestra la fecha/hora en el
+ * recordatorio. 9am (crudo, tiempo real) equivale a 23:00 del mismo día en
+ * Asia/Tokyo (14h adelantado) — sin la conversión, el mensaje llevaría
+ * "09:00", nunca "23:00". Tiempo real, sin setTestNow.
+ */
+test('el recordatorio al dueño muestra la fecha/hora en el timezone de la Organization, no en el del servidor', function () {
+    $organization = reviewPastFixtureOrganization('wamid-review-past-tz');
+    $organization->update(['timezone' => 'Asia/Tokyo']);
+    $organization = $organization->fresh();
+    reviewPastFixtureBooking($organization, now()->subDays(2)->setTime(9, 0));
+
+    $this->artisan('bookings:review-past')->assertSuccessful();
+
+    expect($this->sent)->toHaveCount(1);
+    expect($this->sent[0]['bodyParameters'][2])->toContain('23:00');
+    expect($this->sent[0]['bodyParameters'][2])->not->toContain('09:00');
+});
+
 test('una reserva vencida sin recordatorio recibe uno, dirigido al owner_phone, y queda marcada', function () {
     $organization = reviewPastFixtureOrganization();
     $booking = reviewPastFixtureBooking($organization, now()->subDays(2)->setTime(9, 0));

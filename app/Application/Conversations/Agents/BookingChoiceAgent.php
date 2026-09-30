@@ -37,16 +37,12 @@ class BookingChoiceAgent implements AgentInterface
         ['id' => 'gestionar', 'title' => 'Gestionar reserva'],
     ];
 
-    private readonly DateFieldExtractor $dateExtractor;
-
     public function __construct(
         private readonly ConversationDraftRepositoryInterface $drafts,
         private readonly ConversationSessionRepositoryInterface $sessions,
         private readonly NotificationSenderInterface $notifications,
-        AiServiceInterface $ai,
-    ) {
-        $this->dateExtractor = new DateFieldExtractor($ai);
-    }
+        private readonly AiServiceInterface $ai,
+    ) {}
 
     public function handle(InboundMessage $message, ConversationSession $session, Organization $organization): void
     {
@@ -98,7 +94,7 @@ class BookingChoiceAgent implements AgentInterface
         // FlowStep cuya key ya esté en el draft). Mismo DateFieldExtractor
         // que usa ReservaAgent, así que el resultado (o el fallo) es
         // idéntico al que tendría si hubiera llegado directo a ese Agent.
-        $result = $this->dateExtractor->extract($originalText, []);
+        $result = (new DateFieldExtractor($this->ai, $organization->timezone))->extract($originalText, []);
         $prefilled = $result->successful ? ['date' => $result->value] : [];
 
         // Incremento 4: si el negocio tiene más de un Service, hay que

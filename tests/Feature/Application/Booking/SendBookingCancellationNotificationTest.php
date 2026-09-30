@@ -5,9 +5,9 @@ use App\Application\Contracts\NotificationSenderInterface;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Events\BookingCancelled;
 use App\Domain\CRM\Customer;
+use App\Domain\Scheduling\Service;
 use App\Domain\Tenancy\Location;
 use App\Domain\Tenancy\Organization;
-use App\Domain\Scheduling\Service;
 use App\Enums\BookingStatus;
 
 test('handle() manda la notificación de cancelación con el teléfono y el mensaje correctos', function () {
@@ -42,4 +42,41 @@ test('handle() manda la notificación de cancelación con el teléfono y el mens
     expect($sent[0]['toPhoneE164'])->toBe('+573001234567');
     expect($sent[0]['message'])->toContain('Corte');
     expect($sent[0]['message'])->toContain('cancelada');
+});
+
+/**
+ * Corrección de presentación de timezone — mismo criterio que
+ * SendBookingConfirmationNotificationTest: 20:00 Bogota (crudo) equivale a
+ * 10:00 del día siguiente en Asia/Tokyo. Determinista, sin setTestNow.
+ */
+test('el mensaje muestra la hora en el timezone de la Organization, no en el del servidor', function () {
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'timezone' => 'Asia/Tokyo']);
+    $location = Location::create(['organization_id' => $org->id, 'name' => 'Sede']);
+    $service = Service::create(['organization_id' => $org->id, 'name' => 'Corte', 'duration_minutes' => 30]);
+    $customer = Customer::create(['organization_id' => $org->id, 'phone' => '+573001234567', 'name' => 'Ana']);
+    $booking = Booking::create([
+        'organization_id' => $org->id, 'location_id' => $location->id, 'service_id' => $service->id,
+        'customer_id' => $customer->id, 'starts_at' => '2026-09-07 20:00:00', 'ends_at' => '2026-09-07 20:30:00',
+        'duration_minutes' => 30, 'status' => BookingStatus::CANCELLED, 'cancelled_at' => now(),
+    ]);
+
+    $sent = [];
+    $fakeSender = new class($sent) implements NotificationSenderInterface
+    {
+        public function __construct(private array &$sharedRef) {}
+
+        public function send($organization, string $toPhoneE164, string $message): void
+        {
+            $this->sharedRef[] = compact('organization', 'toPhoneE164', 'message');
+        }
+
+        public function sendTemplate($organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtons($organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
+    };
+
+    (new SendBookingCancellationNotification($fakeSender))->handle(new BookingCancelled($booking));
+
+    expect($sent[0]['message'])->toContain('10:00');
+    expect($sent[0]['message'])->not->toContain('20:00');
 });

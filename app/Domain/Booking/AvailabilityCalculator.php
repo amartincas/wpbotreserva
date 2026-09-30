@@ -4,6 +4,7 @@ namespace App\Domain\Booking;
 
 use App\Domain\Booking\Contracts\AvailabilityCalculatorInterface;
 use App\Domain\Booking\ValueObjects\AvailableSlot;
+use App\Domain\Booking\ValueObjects\CalendarDayRange;
 use App\Domain\Booking\ValueObjects\TimeRange;
 use App\Domain\Scheduling\Resource;
 use App\Domain\Scheduling\ResourceSchedule;
@@ -220,14 +221,24 @@ class AvailabilityCalculator implements AvailabilityCalculatorInterface
         return $slots;
     }
 
+    /**
+     * CalendarDayRange (no whereDate) — corrección transversal de timezone:
+     * whereDate() compara contra el string crudo persistido (en
+     * config('app.timezone')), nunca contra el timezone que $slot->start
+     * puede traer adjunto (de la Organization) — sin esto, la disponibilidad
+     * calculada para cualquier Organization con timezone distinto al del
+     * servidor podría ignorar conflictos reales o bloquear slots libres.
+     */
     private function isSlotAvailable(TimeRange $slot, ?Resource $resource, Service $service, Location $location): bool
     {
         $activeStatuses = [BookingStatus::PENDING->value, BookingStatus::CONFIRMED->value];
+        $range = CalendarDayRange::forDate($slot->start);
 
         if ($resource) {
             $conflicting = Booking::query()
                 ->whereIn('status', $activeStatuses)
-                ->whereDate('starts_at', $slot->start->toDateString())
+                ->where('starts_at', '>=', $range->start)
+                ->where('starts_at', '<', $range->end)
                 ->whereHas('bookingResources', fn ($query) => $query->where('resource_id', $resource->id))
                 ->with('service:id,buffer_minutes')
                 ->get(['id', 'starts_at', 'ends_at', 'service_id']);
@@ -238,7 +249,8 @@ class AvailabilityCalculator implements AvailabilityCalculatorInterface
                 ->whereIn('status', $activeStatuses)
                 ->where('service_id', $service->id)
                 ->where('location_id', $location->id)
-                ->whereDate('starts_at', $slot->start->toDateString())
+                ->where('starts_at', '>=', $range->start)
+                ->where('starts_at', '<', $range->end)
                 ->whereDoesntHave('bookingResources')
                 ->with('service:id,buffer_minutes')
                 ->get(['id', 'starts_at', 'ends_at', 'service_id']);

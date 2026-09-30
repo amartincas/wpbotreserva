@@ -79,7 +79,7 @@ class ConfirmacionAsistenciaAgent implements AgentInterface
             ];
             $this->sessions->recordIntent($session, Intent::ConfirmacionAsistencia);
             $this->drafts->put($session, $draft);
-            $this->reply($organization, $message->fromPhone, $this->formatPendingOptions($pending));
+            $this->reply($organization, $message->fromPhone, $this->formatPendingOptions($pending, $organization));
 
             return;
         }
@@ -213,10 +213,10 @@ class ConfirmacionAsistenciaAgent implements AgentInterface
     /**
      * @param  Collection<int, PendingAttendanceConfirmation>  $pending
      */
-    private function formatPendingOptions(Collection $pending): string
+    private function formatPendingOptions(Collection $pending, Organization $organization): string
     {
         $options = $pending->values()->map(
-            fn (PendingAttendanceConfirmation $p, int $i) => ($i + 1).') '.$p->booking->service->name.' — '.$p->booking->starts_at->translatedFormat('l d/m H:i')
+            fn (PendingAttendanceConfirmation $p, int $i) => ($i + 1).') '.$p->booking->service->name.' — '.$p->booking->starts_at->setTimezone($organization->timezone)->translatedFormat('l d/m H:i')
         )->implode("\n");
 
         return "Tenés más de un recordatorio pendiente:\n\n{$options}\n\nRespondé con el número de la reserva a la que te referís.";

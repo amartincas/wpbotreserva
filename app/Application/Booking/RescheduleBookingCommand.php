@@ -18,6 +18,11 @@ class RescheduleBookingCommand
     public function handle(Booking $booking, CarbonImmutable $newStartsAt): RescheduleBookingResult
     {
         $previousStartsAt = CarbonImmutable::instance($booking->starts_at);
+
+        // Única frontera de normalización de timezone para reprogramación —
+        // mismo criterio y mismo motivo que CreateBookingCommand::handle().
+        $newStartsAt = $newStartsAt->setTimezone(config('app.timezone'));
+
         $rescheduled = $this->scheduler->reschedule($booking, $newStartsAt);
 
         return RescheduleBookingResult::fromBooking($rescheduled, $previousStartsAt);

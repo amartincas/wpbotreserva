@@ -45,6 +45,14 @@ namespace App\Domain\Conversational;
  * existe una fila pendiente real para ese cliente y esa Organization). El
  * "No" de este flujo entrega el control a GestionReserva sin duplicar su
  * lógica — ver ConfirmacionAsistenciaAgent.
+ *
+ * AgendaProfesional (Fase 4): consulta de agenda de un profesional
+ * (Resource, no el dueño) — la produce DeterministicAgendaProfesionalStrategy,
+ * nunca la IA. Gatea por Resource.contact_phone (nunca
+ * Organization.owner_phone, ese es el gate de AdminCommand) vía
+ * ProfessionalResolver, siempre scoped a la Organization ya resuelta. Un
+ * solo Intent para "cuántas"/"qué" — igual criterio que AdminCommand: el
+ * Intent identifica el Agent, no la acción puntual (ver AgendaProfesionalAgent).
  */
 enum Intent: string
 {
@@ -57,5 +65,6 @@ enum Intent: string
     case GestionNegocio = 'gestion_negocio';
     case InfoNegocio = 'info_negocio';
     case ConfirmacionAsistencia = 'confirmacion_asistencia';
+    case AgendaProfesional = 'agenda_profesional';
     case FueraDeAlcance = 'fuera_de_alcance';
 }

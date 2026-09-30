@@ -241,8 +241,20 @@ class BookingScheduler implements BookingSchedulerInterface
         CarbonImmutable $startsAt,
         CarbonImmutable $endsAt,
     ): ?Resource {
+        // Corrección de timezone en disponibilidad: $startsAt ya llega
+        // normalizado a config('app.timezone') (frontera de persistencia,
+        // CreateBookingCommand/RescheduleBookingCommand) — startOfDay() sobre
+        // ESE valor calcularía la medianoche del servidor, no la del negocio.
+        // setTimezone() no cambia el instante real, solo la etiqueta: esto
+        // recupera el día calendario tal como lo pidió el cliente, en
+        // timezone de Organization, antes de volver a calcular las ventanas
+        // de horario del recurso.
+        if (! $location->relationLoaded('organization')) {
+            $location->loadMissing('organization');
+        }
+
         $candidates = $this->availability
-            ->availableSlots($service, $location, $startsAt->startOfDay())
+            ->availableSlots($service, $location, $startsAt->setTimezone($location->organization->timezone)->startOfDay())
             ->filter(fn (AvailableSlot $slot) => $slot->range->start->equalTo($startsAt) && $slot->range->end->equalTo($endsAt))
             ->pluck('resource')
             ->filter()
@@ -269,8 +281,13 @@ class BookingScheduler implements BookingSchedulerInterface
         CarbonImmutable $endsAt,
         ?Resource $resource,
     ): bool {
+        // Mismo motivo que lockFirstAvailableResource().
+        if (! $location->relationLoaded('organization')) {
+            $location->loadMissing('organization');
+        }
+
         return $this->availability
-            ->availableSlots($service, $location, $startsAt->startOfDay(), $resource)
+            ->availableSlots($service, $location, $startsAt->setTimezone($location->organization->timezone)->startOfDay(), $resource)
             ->contains(fn (AvailableSlot $slot) => $slot->range->start->equalTo($startsAt) && $slot->range->end->equalTo($endsAt));
     }
 }
