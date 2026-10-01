@@ -143,7 +143,7 @@ test('modo cantidad, singular: "tenés 1 cita"', function () {
     expect($sent[0]['message'])->toBe('Tenés 1 cita para 15/10/2026.');
 });
 
-test('modo detalle: "qué tengo hoy" lista hora (12h AM/PM) y cliente, sin id ni servicio', function () {
+test('modo detalle: "qué tengo hoy" lista hora (12h AM/PM), cliente y servicio, sin id', function () {
     $organization = agendaAgentFixtureOrganization();
     $resource = agendaAgentFixtureResource($organization);
     agendaAgentFixtureBooking($organization, $resource, now()->setTime(10, 0));
@@ -153,17 +153,22 @@ test('modo detalle: "qué tengo hoy" lista hora (12h AM/PM) y cliente, sin id ni
 
     $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
 
-    expect($sent[0]['message'])->toContain('• 10:00 AM — Ana');
-    expect($sent[0]['message'])->not->toContain('Corte de cabello');
+    expect($sent[0]['message'])->toContain('• 10:00 AM — Ana — Corte de cabello');
     expect($sent[0]['message'])->not->toMatch('/#\d+/');
 });
 
-test('modo detalle con varias citas: formato exacto de cada línea y orden cronológico', function () {
+test('modo detalle con varias citas: formato exacto de cada línea (hora, cliente, servicio) y orden cronológico', function () {
     $organization = agendaAgentFixtureOrganization();
     $resource = agendaAgentFixtureResource($organization);
-    agendaAgentFixtureBooking($organization, $resource, now()->setTime(15, 0))->customer->update(['name' => 'Alicia Fernandez']);
-    agendaAgentFixtureBooking($organization, $resource, now()->setTime(9, 0))->customer->update(['name' => 'Juan Gonzalez']);
-    agendaAgentFixtureBooking($organization, $resource, now()->setTime(10, 0))->customer->update(['name' => 'José Manzanares']);
+    $booking1 = agendaAgentFixtureBooking($organization, $resource, now()->setTime(15, 0));
+    $booking1->customer->update(['name' => 'Pedro Gómez']);
+    $booking1->service->update(['name' => 'Masaje deportivo']);
+    $booking2 = agendaAgentFixtureBooking($organization, $resource, now()->setTime(9, 0));
+    $booking2->customer->update(['name' => 'Juan']);
+    $booking2->service->update(['name' => 'Corte de cabello']);
+    $booking3 = agendaAgentFixtureBooking($organization, $resource, now()->setTime(10, 0));
+    $booking3->customer->update(['name' => 'María']);
+    $booking3->service->update(['name' => 'Masaje relajante']);
     $session = agendaAgentFixtureSession($organization);
     $sent = [];
     $agent = buildAgendaProfesionalAgent($sent);
@@ -172,9 +177,9 @@ test('modo detalle con varias citas: formato exacto de cada línea y orden crono
 
     expect($sent[0]['message'])->toBe(
         "📅 Tus citas de 15/10/2026:\n\n".
-        "• 9:00 AM — Juan Gonzalez\n".
-        "• 10:00 AM — José Manzanares\n".
-        '• 3:00 PM — Alicia Fernandez'
+        "• 9:00 AM — Juan — Corte de cabello\n".
+        "• 10:00 AM — María — Masaje relajante\n".
+        '• 3:00 PM — Pedro Gómez — Masaje deportivo'
     );
 });
 
@@ -188,7 +193,7 @@ test('modo detalle: una cita a las 12:00 AM (medianoche) se formatea correctamen
 
     $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
 
-    expect($sent[0]['message'])->toContain('• 12:00 AM — Ana');
+    expect($sent[0]['message'])->toContain('• 12:00 AM — Ana — Corte de cabello');
 });
 
 test('modo detalle: una cita a las 12:00 PM (mediodía) se formatea correctamente', function () {
@@ -201,7 +206,7 @@ test('modo detalle: una cita a las 12:00 PM (mediodía) se formatea correctament
 
     $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
 
-    expect($sent[0]['message'])->toContain('• 12:00 PM — Ana');
+    expect($sent[0]['message'])->toContain('• 12:00 PM — Ana — Corte de cabello');
 });
 
 test('sin citas: modo cantidad y modo detalle responden el mismo mensaje de vacío, con el emoji de agenda', function () {
@@ -227,7 +232,7 @@ test('consulta de un único día: "hoy", "mañana" y una fecha explícita ("D de
     $agent->handle(agendaAgentFixtureMessage($text), $session, $organization);
 
     expect($sent[0]['message'])->toBe(
-        "📅 Tus citas de {$expectedDate->format('d/m/Y')}:\n\n• 10:00 AM — Ana"
+        "📅 Tus citas de {$expectedDate->format('d/m/Y')}:\n\n• 10:00 AM — Ana — Corte de cabello"
     );
 })->with([
     '¿Qué citas tengo hoy?' => ['¿Qué citas tengo hoy?', CarbonImmutable::parse('2026-10-15 00:00:00', 'America/Bogota')],

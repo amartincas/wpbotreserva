@@ -110,19 +110,20 @@ class AgendaProfesionalAgent implements AgentInterface
             return;
         }
 
-        $bookings->loadMissing('customer');
+        $bookings->loadMissing(['service', 'customer']);
 
         // setTimezone($organization->timezone) — mismo motivo que
         // AdminCommandAgent::formatBookingList(): starts_at releído viene en
         // config('app.timezone'), nunca en el timezone de la Organization.
-        // Formato de presentación (Fase 5): solo hora (12h, sin cero inicial,
-        // AM/PM) y nombre del cliente — sin ID ni servicio, a diferencia del
+        // Formato de presentación (Fase 5, ajuste final): hora (12h, sin cero
+        // inicial, AM/PM), cliente y servicio — sin ID, a diferencia del
         // listado del dueño en AdminCommandAgent::formatBookingList(), que sí
-        // los necesita para los comandos "cancelar <id>"/"confirmar <id>".
+        // lo necesita para los comandos "cancelar <id>"/"confirmar <id>".
         $listado = $bookings->map(fn (Booking $booking) => sprintf(
-            '• %s — %s',
+            '• %s — %s — %s',
             $booking->starts_at->setTimezone($organization->timezone)->format('g:i A'),
             $booking->customer->name ?? $booking->customer->phone->value(),
+            $booking->service->name,
         ))->implode("\n");
 
         $this->reply($organization, $toPhone, $this->botMessages->render('agenda.detalle_header', [
