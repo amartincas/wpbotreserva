@@ -424,7 +424,10 @@ test('agenda profesional después de reprogramación real: la encuentra en la nu
     $agendaSession = tzE2eFixtureSession($organization, '+573005550000');
 
     $agendaAgent->handle(tzE2eFixtureMessage('¿qué reservas tengo mañana?', '+573005550000'), $agendaSession, $organization);
-    expect($agendaSent[0]['message'])->toContain((string) $booking->id);
+    // Fase 5: el detalle de agenda ya no muestra el id de la reserva (solo
+    // hora + nombre del cliente) — 'Ana' identifica la reserva sin ambigüedad
+    // porque es la única de este test.
+    expect($agendaSent[0]['message'])->toContain('Ana');
 
     // Nunca quedó en la fecha original: el campo persistido ya no coincide.
     $booking = $booking->fresh();

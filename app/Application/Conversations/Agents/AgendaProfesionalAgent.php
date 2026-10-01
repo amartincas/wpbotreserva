@@ -84,7 +84,7 @@ class AgendaProfesionalAgent implements AgentInterface
     {
         if ($count === 0) {
             $this->reply($organization, $toPhone, $this->botMessages->render('agenda.cantidad_sin_citas', ['fecha' => $label])
-                ?? "No tenés citas para {$label}.");
+                ?? "📅 No tenés citas para {$label}.");
 
             return;
         }
@@ -105,28 +105,30 @@ class AgendaProfesionalAgent implements AgentInterface
     {
         if ($bookings->isEmpty()) {
             $this->reply($organization, $toPhone, $this->botMessages->render('agenda.cantidad_sin_citas', ['fecha' => $label])
-                ?? "No tenés citas para {$label}.");
+                ?? "📅 No tenés citas para {$label}.");
 
             return;
         }
 
-        $bookings->loadMissing(['service', 'customer']);
+        $bookings->loadMissing('customer');
 
         // setTimezone($organization->timezone) — mismo motivo que
         // AdminCommandAgent::formatBookingList(): starts_at releído viene en
         // config('app.timezone'), nunca en el timezone de la Organization.
+        // Formato de presentación (Fase 5): solo hora (12h, sin cero inicial,
+        // AM/PM) y nombre del cliente — sin ID ni servicio, a diferencia del
+        // listado del dueño en AdminCommandAgent::formatBookingList(), que sí
+        // los necesita para los comandos "cancelar <id>"/"confirmar <id>".
         $listado = $bookings->map(fn (Booking $booking) => sprintf(
-            '#%d %s — %s (%s)',
-            $booking->id,
-            $booking->starts_at->setTimezone($organization->timezone)->format('H:i'),
-            $booking->service->name,
+            '• %s — %s',
+            $booking->starts_at->setTimezone($organization->timezone)->format('g:i A'),
             $booking->customer->name ?? $booking->customer->phone->value(),
         ))->implode("\n");
 
         $this->reply($organization, $toPhone, $this->botMessages->render('agenda.detalle_header', [
             'fecha' => $label,
             'listado' => $listado,
-        ]) ?? "Tus citas de {$label}:\n\n{$listado}");
+        ]) ?? "📅 Tus citas de {$label}:\n\n{$listado}");
     }
 
     private function reply(Organization $organization, string $toPhone, string $text): void

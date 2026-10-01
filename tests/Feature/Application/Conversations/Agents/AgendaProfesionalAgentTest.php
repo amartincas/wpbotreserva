@@ -143,20 +143,68 @@ test('modo cantidad, singular: "tenés 1 cita"', function () {
     expect($sent[0]['message'])->toBe('Tenés 1 cita para 15/10/2026.');
 });
 
-test('modo detalle: "qué tengo hoy" lista id, hora, servicio y cliente', function () {
+test('modo detalle: "qué tengo hoy" lista hora (12h AM/PM) y cliente, sin id ni servicio', function () {
     $organization = agendaAgentFixtureOrganization();
     $resource = agendaAgentFixtureResource($organization);
-    $booking = agendaAgentFixtureBooking($organization, $resource, now()->setTime(10, 0));
+    agendaAgentFixtureBooking($organization, $resource, now()->setTime(10, 0));
     $session = agendaAgentFixtureSession($organization);
     $sent = [];
     $agent = buildAgendaProfesionalAgent($sent);
 
     $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
 
-    expect($sent[0]['message'])->toContain("#{$booking->id} 10:00 — Corte de cabello (Ana)");
+    expect($sent[0]['message'])->toContain('• 10:00 AM — Ana');
+    expect($sent[0]['message'])->not->toContain('Corte de cabello');
+    expect($sent[0]['message'])->not->toMatch('/#\d+/');
 });
 
-test('sin citas: modo cantidad y modo detalle responden el mismo mensaje de vacío', function () {
+test('modo detalle con varias citas: formato exacto de cada línea y orden cronológico', function () {
+    $organization = agendaAgentFixtureOrganization();
+    $resource = agendaAgentFixtureResource($organization);
+    agendaAgentFixtureBooking($organization, $resource, now()->setTime(15, 0))->customer->update(['name' => 'Alicia Fernandez']);
+    agendaAgentFixtureBooking($organization, $resource, now()->setTime(9, 0))->customer->update(['name' => 'Juan Gonzalez']);
+    agendaAgentFixtureBooking($organization, $resource, now()->setTime(10, 0))->customer->update(['name' => 'José Manzanares']);
+    $session = agendaAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAgendaProfesionalAgent($sent);
+
+    $agent->handle(agendaAgentFixtureMessage('¿Qué citas tengo hoy?'), $session, $organization);
+
+    expect($sent[0]['message'])->toBe(
+        "📅 Tus citas de 15/10/2026:\n\n".
+        "• 9:00 AM — Juan Gonzalez\n".
+        "• 10:00 AM — José Manzanares\n".
+        '• 3:00 PM — Alicia Fernandez'
+    );
+});
+
+test('modo detalle: una cita a las 12:00 AM (medianoche) se formatea correctamente', function () {
+    $organization = agendaAgentFixtureOrganization();
+    $resource = agendaAgentFixtureResource($organization);
+    agendaAgentFixtureBooking($organization, $resource, now()->setTime(0, 0))->customer->update(['name' => 'Ana']);
+    $session = agendaAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAgendaProfesionalAgent($sent);
+
+    $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('• 12:00 AM — Ana');
+});
+
+test('modo detalle: una cita a las 12:00 PM (mediodía) se formatea correctamente', function () {
+    $organization = agendaAgentFixtureOrganization();
+    $resource = agendaAgentFixtureResource($organization);
+    agendaAgentFixtureBooking($organization, $resource, now()->setTime(12, 0))->customer->update(['name' => 'Ana']);
+    $session = agendaAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAgendaProfesionalAgent($sent);
+
+    $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
+
+    expect($sent[0]['message'])->toContain('• 12:00 PM — Ana');
+});
+
+test('sin citas: modo cantidad y modo detalle responden el mismo mensaje de vacío, con el emoji de agenda', function () {
     $organization = agendaAgentFixtureOrganization();
     agendaAgentFixtureResource($organization);
     $session = agendaAgentFixtureSession($organization);
@@ -165,8 +213,30 @@ test('sin citas: modo cantidad y modo detalle responden el mismo mensaje de vac�
 
     $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
 
-    expect($sent[0]['message'])->toBe('No tenés citas para 15/10/2026.');
+    expect($sent[0]['message'])->toBe('📅 No tenés citas para 15/10/2026.');
 });
+
+test('consulta de un único día: "hoy", "mañana" y una fecha explícita ("D de mes") devuelven la agenda de ese día', function (string $text, CarbonImmutable $expectedDate) {
+    $organization = agendaAgentFixtureOrganization();
+    $resource = agendaAgentFixtureResource($organization);
+    agendaAgentFixtureBooking($organization, $resource, $expectedDate->setTime(10, 0))->customer->update(['name' => 'Ana']);
+    $session = agendaAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAgendaProfesionalAgent($sent);
+
+    $agent->handle(agendaAgentFixtureMessage($text), $session, $organization);
+
+    expect($sent[0]['message'])->toBe(
+        "📅 Tus citas de {$expectedDate->format('d/m/Y')}:\n\n• 10:00 AM — Ana"
+    );
+})->with([
+    '¿Qué citas tengo hoy?' => ['¿Qué citas tengo hoy?', CarbonImmutable::parse('2026-10-15 00:00:00', 'America/Bogota')],
+    '¿Qué citas tengo mañana?' => ['¿Qué citas tengo mañana?', CarbonImmutable::parse('2026-10-16 00:00:00', 'America/Bogota')],
+    // "5 de octubre" ya pasó respecto al "hoy" congelado (15/10/2026) —
+    // AgendaDateResolver asume la próxima ocurrencia, igual criterio que
+    // "3 de septiembre" en AgendaDateResolverTest: resuelve a 2027, no 2026.
+    '¿Qué citas tengo para el 5 de octubre?' => ['¿Qué citas tengo para el 5 de octubre?', CarbonImmutable::parse('2027-10-05 00:00:00', 'America/Bogota')],
+]);
 
 test('CANCELLED se excluye de la agenda del profesional', function () {
     $organization = agendaAgentFixtureOrganization();
@@ -178,7 +248,7 @@ test('CANCELLED se excluye de la agenda del profesional', function () {
 
     $agent->handle(agendaAgentFixtureMessage('¿Qué tengo hoy?'), $session, $organization);
 
-    expect($sent[0]['message'])->toBe('No tenés citas para 15/10/2026.');
+    expect($sent[0]['message'])->toBe('📅 No tenés citas para 15/10/2026.');
 });
 
 test('COMPLETED y NO_SHOW se incluyen en la agenda del profesional', function () {
