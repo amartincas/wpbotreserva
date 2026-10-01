@@ -32,7 +32,7 @@ test('una location pertenece a una organization y hereda timezone si no tiene el
     expect($location->country_code)->toBe('CO');
 });
 
-test('un channel puede estar vinculado a varias organizations (N:N por diseño)', function () {
+test('un channel se vincula a lo sumo a una organization — un segundo vínculo viola UNIQUE(channel_id)', function () {
     $channel = Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
         'channel_type' => ChannelType::WHATSAPP,
@@ -43,11 +43,41 @@ test('un channel puede estar vinculado a varias organizations (N:N por diseño)'
     $orgA = Organization::create(['name' => 'Barbería Don Carlos']);
     $orgB = Organization::create(['name' => 'Spa Relax']);
 
-    $channel->organizations()->attach([$orgA->id, $orgB->id]);
+    $channel->organizations()->attach($orgA->id, ['is_primary' => true]);
 
-    expect($channel->organizations)->toHaveCount(2);
+    expect($channel->organizations)->toHaveCount(1);
     expect($orgA->channels)->toHaveCount(1);
     expect($channel->isActive())->toBeTrue();
+
+    // Fase 6: UNIQUE(channel_id) en channel_organization (no solo
+    // UNIQUE(channel_id, organization_id), que ya existía antes y nunca
+    // impidió esto) es lo que hace cumplir "Channel → 0 o 1 Organization"
+    // también a nivel de base de datos, no solo conversacionalmente.
+    expect(fn () => $channel->organizations()->attach($orgB->id, ['is_primary' => false]))
+        ->toThrow(QueryException::class);
+
+    expect($channel->fresh()->organizations)->toHaveCount(1);
+    expect($channel->fresh()->organizations->first()->is($orgA))->toBeTrue();
+});
+
+test('una organization sí puede estar vinculada a varios channels', function () {
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    $channelA = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-multi-a',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $channelB = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'phone_number_id' => 'wamid-multi-b',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+
+    $org->channels()->attach([$channelA->id, $channelB->id]);
+
+    expect($org->channels)->toHaveCount(2);
 });
 
 test('phone_number_id de channel es único', function () {

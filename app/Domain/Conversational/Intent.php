@@ -53,10 +53,28 @@ namespace App\Domain\Conversational;
  * ProfessionalResolver, siempre scoped a la Organization ya resuelta. Un
  * solo Intent para "cuántas"/"qué" — igual criterio que AdminCommand: el
  * Intent identifica el Agent, no la acción puntual (ver AgendaProfesionalAgent).
+ *
+ * RegistroNegocioBloqueado (Fase 6): mismo criterio que ReservaOGestion —
+ * NINGÚN IntentClassifierStrategy lo produce nunca. Es una sustitución que
+ * hace InboundMessageRouter sobre un RegistroNegocio ya clasificado, cuando
+ * el Channel ya resuelve a una Organization existente en un arranque de
+ * conversación nuevo (nunca a mitad de un registro ya en curso) — evita que
+ * RegistroNegocioAgent corra de nuevo y cree una segunda Organization para
+ * el mismo Channel. Ver InboundMessageRouter y RegistroNegocioBloqueadoAgent.
+ *
+ * RegistroNegocioExpirado (Fase 6): sí lo produce un Strategy determinista
+ * (ExpiredRegistroNegocioStrategy), pero nunca a partir de analizar el
+ * contenido del mensaje — solo del estado ya vencido de la sesión
+ * (current_intent todavía RegistroNegocio + TTL de continuidad superado).
+ * Informa al dueño que su registro anterior expiró y deja la sesión limpia
+ * para un intento nuevo, en vez de dejar que el mensaje se reclasifique en
+ * silencio y el registro parezca "continuar" con un draft vacío.
  */
 enum Intent: string
 {
     case RegistroNegocio = 'registro_negocio';
+    case RegistroNegocioBloqueado = 'registro_negocio_bloqueado';
+    case RegistroNegocioExpirado = 'registro_negocio_expirado';
     case Reserva = 'reserva';
     case GestionReserva = 'gestion_reserva';
     case ReservaOGestion = 'reserva_o_gestion';

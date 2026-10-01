@@ -60,7 +60,7 @@ Infraestructura (MariaDB, Redis) — vía Eloquent/Cache, nunca referenciada por
 
 - **`Organization`** — raíz de tenant. Defaults: `timezone=America/Bogota`, `locale=es`, `currency=COP`, `is_active=true`. Ciclo de vida: `is_active`/`suspended_at`/`suspension_reason` (para Subscription & Billing futuro, sin lógica todavía). `owner_phone` distingue al dueño del negocio de un cliente cualquiera (usado por `RegisterOrganizationCommand`, no todavía por ningún Agent).
 - **`Location`** — pertenece a `Organization`; hereda `timezone` si no tiene el suyo.
-- **`Channel`** — **excepción intencional**: no lleva `organization_id` directo. Relación N:N vía `channel_organization` (`unique(channel_id, organization_id)`, pivot `is_primary`). `phone_number_id` es único (`unique`, nullable) y es el identificador estable de proveedor (nunca el número visible). `status` (`ChannelStatus`: `PENDING_VERIFICATION|ACTIVE|DISCONNECTED|SUSPENDED|BLOCKED_BY_META|ERROR`), `provider` (`ChannelProvider`), `channel_type` (`ChannelType`), `credentials` (`encrypted:array`), `metadata` (`array`). `isActive(): bool` es el único método de negocio.
+- **`Channel`** — **excepción intencional**: no lleva `organization_id` directo. Vinculado a `Organization` vía `channel_organization` (pivot `is_primary`); la relación usa `BelongsToMany` por la forma de la tabla, pero la regla de negocio es Channel → 0 o 1 Organization, forzada por `unique(channel_id)` (Fase 6) además del `unique(channel_id, organization_id)` original — una Organization sí puede tener varios Channels. `phone_number_id` es único (`unique`, nullable) y es el identificador estable de proveedor (nunca el número visible). `status` (`ChannelStatus`: `PENDING_VERIFICATION|ACTIVE|DISCONNECTED|SUSPENDED|BLOCKED_BY_META|ERROR`), `provider` (`ChannelProvider`), `channel_type` (`ChannelType`), `credentials` (`encrypted:array`), `metadata` (`array`). `isActive(): bool` es el único método de negocio.
 
 ### Scheduling & Availability
 
@@ -95,7 +95,7 @@ Infraestructura (MariaDB, Redis) — vía Eloquent/Cache, nunca referenciada por
 | `AvailableSlot` | `App\Domain\Booking\ValueObjects` | Resultado inmutable de `AvailabilityCalculator`. |
 | `Intent` (enum) | `App\Domain\Conversational` | Vocabulario cerrado: `RegistroNegocio`, `Reserva`, `FueraDeAlcance`. Ampliar (ej. `GestionReserva`, Incremento 2) es agregar un case, nunca un string suelto. |
 | `InboundMessage` | `App\Domain\Conversational` | DTO inmutable: `messageId` (WAMID — identidad del mensaje, clave de deduplicación), `phoneNumberId`, `fromPhone`, `text`, `receivedAt`. Ya normalizado (texto plano) — la normalización desde audio/imagen es responsabilidad del Hito 7, nunca de este VO. |
-| `OrganizationResolution` | `App\Application\Organizations` | Result DTO con estado (`OrganizationResolutionStatus`: `Resolved\|PendingDisambiguation\|NotFound`) — nunca una excepción para un caso esperado. |
+| `OrganizationResolution` | `App\Application\Organizations` | Result DTO con estado (`OrganizationResolutionStatus`: `Resolved\|Unregistered`) — nunca una excepción para un caso esperado. |
 
 ---
 
@@ -185,10 +185,10 @@ handle(InboundMessage $message): void
     → null | inactivo               ⇒ InboundMessageRejected, return
   ConversationSessionRepositoryInterface::findOrCreateFor(channel, fromPhone)
   OrganizationResolverInterface::resolve(channel, session)
-    → NotFound                      ⇒ InboundMessageRejected, return
-    → PendingDisambiguation         ⇒ InboundMessageRejected, return (ver nota)
+    → Unregistered                  ⇒ organization = null (RegistroNegocioAgent puede arrancar igual)
     → Resolved                      ⇒ attachOrganization(session, organization)
   IntentClassifierInterface::classify(message, session)
+  (Fase 6: si $isFreshFlow && organization !== null && intent === RegistroNegocio ⇒ sustituye a RegistroNegocioBloqueado)
   ConversationSessionRepositoryInterface::recordIntent(session, intent)
   AgentSelector::selectFor(intent)
     → null                         ⇒ InboundMessageRejected, return
@@ -198,7 +198,7 @@ handle(InboundMessage $message): void
 **Disciplina que blinda esto contra scope creep** (acordada explícitamente antes de construir el Hito 4, no un accidente de diseño):
 - Los únicos condicionales del Router son guardas de flujo sobre resultados **ya resueltos** por sus colaboradores — nunca interpretación de contenido del mensaje.
 - El Router **nunca** invoca un Application Command directamente. Quien lo hace es el `AgentInterface` seleccionado — cada Agent recibe por constructor solo el/los Command(s) de su propio allow-list (Parte XI punto 7). "Ejecutar el Command" es responsabilidad del Agent, no del Router.
-- Nota sobre `PendingDisambiguation`: la desambiguación interactiva real (preguntarle al cliente cuál es su negocio) es roadmap explícito (Parte XIV, disparador: segundo piloto activo con canal compartido) — hoy se rechaza de forma segura en vez de proceder con una organización adivinada.
+- Fase 6: Channel → 0 o 1 Organization es la regla de negocio definitiva (`unique(channel_id)` en `channel_organization`) — `OrganizationResolverInterface` ya no tiene un tercer estado para "varias Organizations", ese caso dejó de ser alcanzable.
 
 ---
 
@@ -274,10 +274,10 @@ El resto del catálogo de la visión (`BookingCancelled`, `BookingRescheduled`, 
 4. **`InboundMessageRouter` es y debe seguir siendo un orquestador puro.** Sin condicionales sobre contenido del mensaje, sin invocar Commands directamente, sin lógica conversacional o de dominio.
 5. **`IntentClassifierStrategy` produce solo un `Intent`.** Nunca un Agent concreto, nunca una llamada a Application Command, nunca un efecto conversacional. Nuevas estrategias se agregan al array ordenado del composite, nunca crecen dentro de una estrategia existente ni dentro del Router.
 6. **`AgentSelector` es un lookup puro `Intent → Agent`.** Si algún día la selección necesita depender de algo más que el Intent, esa lógica se extrae a una pieza nueva sin modificar `AgentSelector` ni el Router.
-7. **`Channel` es la única excepción a "todo aggregate mutable lleva `organization_id` directo".** Es N:N por diseño (Parte XVI) — cualquier código que lo toque debe razonar explícitamente sobre "para qué organizaciones aplica esto", nunca asumir un solo tenant.
+7. **`Channel` es la única excepción a "todo aggregate mutable lleva `organization_id` directo".** Se vincula a lo sumo a una Organization (Fase 6, `unique(channel_id)` en `channel_organization`) — puede existir sin ninguna todavía (estado inicial normal de un Channel nuevo), nunca con más de una.
 8. **Dos mecanismos de concurrencia, no intercambiables:** lock de fila en MariaDB para invariantes de dominio sobre estado comprometido (`BookingScheduler`); mutex de Redis para serializar un único punto de entrada lógico (`InboundMessageRouter` por conversación). No usar uno para el problema del otro.
 9. **Nunca asumir que un identificador de proveedor (message_id, etc.) es único de forma global entre proveedores.** Toda clave de cache/dedup que derive de un ID externo va scopeada por el identificador estable del canal/proveedor.
 10. **Nunca tocar código, tablas o modelos del sistema legado** (`app/Models/*`, `ProcessWhatsAppMessage`, `WhatsAppController`, `WhatsAppService`) al construir WpbotReserva. Reutilizar infraestructura de bajo nivel genuinamente compartible (ej. clases de `app/Services/AI/*` vía la interfaz correcta) está bien; reutilizar dominio de negociación no.
-11. **Ningún cambio estructural sin evidencia real** (Parte XIII regla 1). Lo que hoy es un recorte deliberado (workflow como enum simple, `cancellation_policy` como texto libre, sin desambiguación interactiva de organización) se documenta como tal, con su disparador de activación nombrado — nunca se construye por adelantado "porque total es barato".
+11. **Ningún cambio estructural sin evidencia real** (Parte XIII regla 1). Lo que hoy es un recorte deliberado (workflow como enum simple, `cancellation_policy` como texto libre) se documenta como tal, con su disparador de activación nombrado — nunca se construye por adelantado "porque total es barato".
 12. **Tests contra infraestructura real cuando la garantía depende de esa infraestructura específica** (MariaDB real por los `CHECK` constraints, Redis real para mutex/dedup). Un test que pasa contra un doble no es evidencia de que el mecanismo real funciona.
 13. **Cada hito termina funcionando de punta a punta, nunca al 80%**, con su propio commit como punto de restauración y su verificación evidence-based (suite completa, cobertura de lo nuevo, Pint, salud del stack Docker) antes de darlo por cerrado.

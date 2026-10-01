@@ -8,11 +8,9 @@ use App\Domain\Tenancy\Channel;
 
 /**
  * Se limita a resolver el contexto de la organización y devolver un estado
- * determinista (Parte XIV, corregida en la revisión previa al Hito 4): no
- * inicia conversaciones, no crea organizaciones, no ejecuta lógica de
- * negocio. El flujo de desambiguación con el cliente (si PendingDisambiguation)
- * es responsabilidad de un Agent disparado por el Router, nunca de este
- * resolver.
+ * determinista: no inicia conversaciones, no crea organizaciones, no
+ * ejecuta lógica de negocio. Channel → 0 o 1 Organization (Fase 6, forzado
+ * también por UNIQUE(channel_id) en channel_organization).
  */
 interface OrganizationResolverInterface
 {

@@ -8,14 +8,17 @@ use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 
 /**
- * Implementación MVP (Parte XIV) — si la sesión ya tiene una organización
- * resuelta de un mensaje anterior, la reutiliza sin volver a consultar el
- * pivot (evita un join en cada mensaje). Si no, resuelve por cantidad de
- * organizaciones vinculadas al Channel: 1 = resuelta directo, 0 = todavía
- * sin registrar (estado inicial normal de todo Channel nuevo, no un error
- * — dispara el flujo de RegistroNegocioAgent), 2+ = pendiente de
- * desambiguación (el matching por nombre real es roadmap — Parte XIV —
- * disparado por un segundo piloto activo).
+ * Implementación MVP — si la sesión ya tiene una organización resuelta de un
+ * mensaje anterior, la reutiliza sin volver a consultar el pivot (evita un
+ * join en cada mensaje). Si no, resuelve por cantidad de organizaciones
+ * vinculadas al Channel: 1 = resuelta directo, 0 = todavía sin registrar
+ * (estado inicial normal de todo Channel nuevo, no un error — dispara el
+ * flujo de RegistroNegocioAgent).
+ *
+ * Fase 6: Channel → 0 o 1 Organization es la regla de negocio definitiva
+ * (UNIQUE(channel_id) en channel_organization la hace cumplir también a
+ * nivel de base de datos) — 2+ ya no es un estado alcanzable, así que no
+ * necesita rama propia acá.
  */
 class SingleOrganizationResolver implements OrganizationResolverInterface
 {
@@ -29,12 +32,10 @@ class SingleOrganizationResolver implements OrganizationResolverInterface
             }
         }
 
-        $candidates = $channel->organizations()->get();
+        $organization = $channel->organizations()->first();
 
-        return match ($candidates->count()) {
-            0 => OrganizationResolution::unregistered(),
-            1 => OrganizationResolution::resolved($candidates->first()),
-            default => OrganizationResolution::pendingDisambiguation($candidates->all()),
-        };
+        return $organization === null
+            ? OrganizationResolution::unregistered()
+            : OrganizationResolution::resolved($organization);
     }
 }

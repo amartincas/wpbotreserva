@@ -73,15 +73,6 @@ class InboundMessageRouter
 
         $resolution = $this->organizations->resolve($channel, $session);
 
-        if ($resolution->status === OrganizationResolutionStatus::PendingDisambiguation) {
-            // Desambiguación interactiva real es roadmap (Parte XIV,
-            // disparador: segundo piloto activo) — hoy se rechaza de forma
-            // segura en vez de proceder con una organización adivinada.
-            InboundMessageRejected::dispatch($message, 'organization_pending_disambiguation');
-
-            return;
-        }
-
         $organization = $resolution->status === OrganizationResolutionStatus::Resolved
             ? $resolution->organization
             : null;
@@ -103,6 +94,21 @@ class InboundMessageRouter
             if ($this->activeBookings->forCustomer($organization, $message->fromPhone)->isNotEmpty()) {
                 $intent = Intent::ReservaOGestion;
             }
+        }
+
+        // Fase 6: mismo patrón que la sustitución de arriba — una guarda
+        // sobre un resultado ya resuelto por un colaborador (Organization),
+        // nunca sobre el contenido del mensaje. $isFreshFlow es lo que
+        // distingue "alguien intenta arrancar un registro nuevo" de "sigue
+        // un registro ya en curso" (incluido el caso real de una sesión
+        // memoizada a una Organization vieja: ahí current_intent ya era
+        // RegistroNegocio antes de este mensaje, así que $isFreshFlow es
+        // false y esta guarda no interfiere). Cubre tanto ButtonIntentStrategy
+        // (clic en "Registrar negocio") como AiIntentClassifierStrategy
+        // (frase libre) por igual, porque actúa sobre el Intent ya
+        // clasificado, no sobre cuál estrategia lo produjo.
+        if ($isFreshFlow && $organization !== null && $intent === Intent::RegistroNegocio) {
+            $intent = Intent::RegistroNegocioBloqueado;
         }
 
         $this->sessions->recordIntent($session, $intent);

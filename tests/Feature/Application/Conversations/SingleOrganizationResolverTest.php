@@ -42,20 +42,14 @@ test('devuelve Unregistered cuando el Channel no tiene ninguna organización vin
     expect($resolution->organization)->toBeNull();
 });
 
-test('devuelve PendingDisambiguation con los candidatos cuando el Channel tiene varias organizaciones', function () {
-    $channel = orgResolverFixtureChannel();
-    $orgA = Organization::create(['name' => 'Barbería A']);
-    $orgB = Organization::create(['name' => 'Barbería B']);
-    $channel->organizations()->attach([$orgA->id => ['is_primary' => true], $orgB->id => ['is_primary' => false]]);
-
-    $session = ConversationSession::create(['channel_id' => $channel->id, 'customer_phone' => '+573001234567']);
-
-    $resolution = (new SingleOrganizationResolver)->resolve($channel, $session);
-
-    expect($resolution->status)->toBe(OrganizationResolutionStatus::PendingDisambiguation);
-    expect($resolution->candidates)->toHaveCount(2);
-});
-
+/**
+ * Fase 6: un Channel ya no puede tener más de una Organization vinculada
+ * (UNIQUE(channel_id) en channel_organization) — el propio fixture de este
+ * escenario (2 Organizations para el mismo Channel) ya no se puede
+ * construir con un attach() real, así que deja de tener sentido probarlo
+ * acá. "Channel → 0 o 1 Organization" es la regla de negocio definitiva,
+ * no una transición.
+ */
 test('reutiliza organization_id ya resuelto en la sesión sin volver a consultar el pivot', function () {
     $channel = orgResolverFixtureChannel();
     $org = Organization::create(['name' => 'Barbería Don Carlos']);

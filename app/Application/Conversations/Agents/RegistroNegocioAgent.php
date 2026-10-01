@@ -21,6 +21,7 @@ use App\Application\Conversations\Flows\ServicePriceResult;
 use App\Application\Conversations\Flows\ServiceResourceSelectionFlow;
 use App\Application\Conversations\Flows\SpanishWeekdayNames;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
+use App\Application\Exceptions\ChannelAlreadyRegisteredException;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -101,19 +102,26 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
                 fn () => $this->botMessages->render('registro.nombre_negocio') ?? '¿Cuál es el nombre de tu negocio?',
                 new AiFieldExtractor($ai, 'nombre del negocio', 'El nombre comercial con el que opera el negocio.', $botMessages),
             ),
+            // FreeTextFieldExtractor (no AiFieldExtractor) para ciudad/dirección
+            // — Fase 6: ambas ya eran nullable en Location/RegisterOrganizationData,
+            // pero AiFieldExtractor no tiene camino de "omitir" (falla y
+            // repregunta indefinidamente), así que la opcionalidad declarada
+            // por el dominio nunca era alcanzable en la conversación real.
+            // Mismo extractor y mismo criterio que organizationDescription
+            // abajo, sin tocar su semántica.
             new FlowStep(
                 'city',
-                fn () => $this->botMessages->render('registro.ciudad') ?? '¿En qué ciudad está?',
-                new AiFieldExtractor($ai, 'ciudad', 'La ciudad donde opera el negocio.', $botMessages),
+                fn () => $this->botMessages->render('registro.ciudad') ?? '¿En qué ciudad está? (opcional, escribí "no" para omitir)',
+                new FreeTextFieldExtractor,
             ),
             new FlowStep(
                 'address',
-                fn () => $this->botMessages->render('registro.direccion') ?? '¿Cuál es la dirección?',
-                new AiFieldExtractor($ai, 'dirección', 'La dirección física del negocio.', $botMessages),
+                fn () => $this->botMessages->render('registro.direccion') ?? '¿Cuál es la dirección? (opcional, escribí "no" para omitir)',
+                new FreeTextFieldExtractor,
             ),
             // FreeTextFieldExtractor nunca falla ni usa IA — el texto se
             // guarda tal cual, o NULL si el dueño omite la pregunta. Puede
-            // ser un 4º FlowStep común (a diferencia de servicios/recursos)
+            // ser un FlowStep común (a diferencia de servicios/recursos)
             // porque es un único campo de valor fijo, y ConversationalFlowRunner
             // ya soporta valores NULL como "respondido" (ver advance()/
             // currentStep(), que usan array_key_exists, no isset()).
@@ -497,16 +505,33 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             $draft['resources'],
         );
 
-        $result = $this->registerOrganization->handle(new RegisterOrganizationData(
-            organizationName: $draft['organizationName'],
-            ownerPhone: $message->fromPhone,
-            channel: $session->channel,
-            city: $draft['city'] ?? null,
-            address: $draft['address'] ?? null,
-            services: $services,
-            resources: $resources,
-            organizationDescription: $draft['organizationDescription'] ?? null,
-        ));
+        try {
+            $result = $this->registerOrganization->handle(new RegisterOrganizationData(
+                organizationName: $draft['organizationName'],
+                ownerPhone: $message->fromPhone,
+                channel: $session->channel,
+                city: $draft['city'] ?? null,
+                address: $draft['address'] ?? null,
+                services: $services,
+                resources: $resources,
+                organizationDescription: $draft['organizationDescription'] ?? null,
+            ));
+        } catch (ChannelAlreadyRegisteredException) {
+            // Fase 6 — capa 2 disparada de verdad: una condición de carrera
+            // real (dos remitentes distintos del mismo Channel confirmando
+            // casi al mismo tiempo, ver ChannelAlreadyRegisteredException)
+            // ganó en la base de datos antes de que llegáramos acá, pese a
+            // que el guard conversacional del Router ya había dejado pasar
+            // este registro como "fresco". Mismo mensaje que ese guard, para
+            // que el dueño vea una respuesta consistente sin importar en qué
+            // capa se detectó.
+            $this->drafts->forget($session);
+            $this->sessions->recordIntent($session, null);
+            $this->reply($session, $this->botMessages->render('registro.negocio_bloqueado')
+                ?? 'Este negocio ya está registrado. Si necesitás agregar un servicio, cambiar un horario o hacer otra gestión, contame qué querés hacer.');
+
+            return;
+        }
 
         // Caso real: en un Channel que ya tenía otra Organization vinculada
         // (número de prueba compartido entre varios pilotos), la sesión de

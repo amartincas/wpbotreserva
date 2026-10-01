@@ -29,6 +29,8 @@ use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Agents\InfoNegocioAgent;
 use App\Application\Conversations\Agents\OutOfScopeAgent;
 use App\Application\Conversations\Agents\RegistroNegocioAgent;
+use App\Application\Conversations\Agents\RegistroNegocioBloqueadoAgent;
+use App\Application\Conversations\Agents\RegistroNegocioExpiradoAgent;
 use App\Application\Conversations\Agents\ReservaAgent;
 use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\Classification\AiIntentClassifierStrategy;
@@ -38,6 +40,7 @@ use App\Application\Conversations\Classification\ConversationContinuityStrategy;
 use App\Application\Conversations\Classification\DeterministicAdminCommandStrategy;
 use App\Application\Conversations\Classification\DeterministicAgendaProfesionalStrategy;
 use App\Application\Conversations\Classification\DeterministicBusinessManagementStrategy;
+use App\Application\Conversations\Classification\ExpiredRegistroNegocioStrategy;
 use App\Application\Conversations\Classification\PendingAttendanceConfirmationStrategy;
 use App\Application\Conversations\Classification\ResetKeywordStrategy;
 use App\Application\Conversations\EloquentConversationSessionRepository;
@@ -129,6 +132,13 @@ class AppServiceProvider extends ServiceProvider
                 $this->app->make(DeterministicAgendaProfesionalStrategy::class),
                 $this->app->make(ResetKeywordStrategy::class),
                 $this->app->make(ButtonIntentStrategy::class),
+                // Fase 6: después del botón (un clic explícito en "Registrar
+                // negocio" ya es decisión del dueño de empezar de nuevo, gana
+                // sin aviso) y antes de continuidad (que para cualquier otro
+                // Intent simplemente deja de considerarlo activo en
+                // silencio) — único caso en el que el proyecto avisa
+                // explícitamente un vencimiento en vez de reclasificar mudo.
+                $this->app->make(ExpiredRegistroNegocioStrategy::class),
                 $this->app->make(ConversationContinuityStrategy::class),
                 // Fase 3: después de continuidad a propósito — una
                 // conversación activa distinta tiene prioridad sobre un
@@ -146,6 +156,8 @@ class AppServiceProvider extends ServiceProvider
             return new AgentSelector([
                 Intent::FueraDeAlcance->value => $this->app->make(OutOfScopeAgent::class),
                 Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
+                Intent::RegistroNegocioBloqueado->value => $this->app->make(RegistroNegocioBloqueadoAgent::class),
+                Intent::RegistroNegocioExpirado->value => $this->app->make(RegistroNegocioExpiradoAgent::class),
                 Intent::Reserva->value => $this->app->make(ReservaAgent::class),
                 Intent::GestionReserva->value => $this->app->make(GestionReservaAgent::class),
                 Intent::ReservaOGestion->value => $this->app->make(BookingChoiceAgent::class),

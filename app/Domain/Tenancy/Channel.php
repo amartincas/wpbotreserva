@@ -11,9 +11,16 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
- * Aggregate Root sin organization_id directo a propósito (Parte XVI) —
- * excepción documentada de Parte XI punto 5: un Channel puede servir a
- * varias organizaciones por diseño. Nunca le apliques BelongsToOrganization.
+ * Aggregate Root sin organization_id directo a propósito — excepción
+ * documentada de Parte XI punto 5: un Channel puede existir antes de que
+ * cualquier Organization se registre contra él (estado inicial normal,
+ * nunca un error). Nunca le apliques BelongsToOrganization.
+ *
+ * Channel → 0 o 1 Organization (regla de negocio definitiva, Fase 6),
+ * forzada también por UNIQUE(channel_id) en channel_organization —
+ * `organizations()` usa BelongsToMany solo porque la relación pasa por una
+ * tabla pivot, no porque un Channel pueda estar vinculado a más de una
+ * Organization.
  */
 #[Fillable([
     'provider',

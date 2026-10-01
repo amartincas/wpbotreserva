@@ -1,6 +1,8 @@
 <?php
 
 use App\Application\Contracts\EntitlementCheckerInterface;
+use App\Application\Entitlements\UnlimitedEntitlementChecker;
+use App\Application\Exceptions\ChannelAlreadyRegisteredException;
 use App\Application\Exceptions\EntitlementDeniedException;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
@@ -13,6 +15,7 @@ use App\Enums\ChannelProvider;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use App\Enums\ResourceType;
+use Illuminate\Support\Facades\DB;
 
 function registerOrgFixtureChannel(): Channel
 {
@@ -253,4 +256,30 @@ test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea 
         ->toThrow(EntitlementDeniedException::class);
 
     expect(Organization::count())->toBe(0);
+});
+
+/**
+ * Fase 6 — Cambio A.5: defensa transaccional (capa 2) contra doble
+ * registro. El guard conversacional del Router (capa 1) es quien cubre el
+ * caso común; esto prueba directamente que el propio Command, invocado dos
+ * veces para el mismo Channel, nunca produce un segundo vínculo — con o sin
+ * guard conversacional de por medio.
+ */
+test('un segundo registro sobre un Channel ya vinculado lanza ChannelAlreadyRegisteredException y revierte toda la transacción', function () {
+    $channel = registerOrgFixtureChannel();
+    $command = new RegisterOrganizationCommand(new UnlimitedEntitlementChecker);
+
+    $first = $command->handle(registerOrgData($channel));
+
+    expect(fn () => $command->handle(registerOrgData($channel, ['organizationName' => 'Otro Negocio'])))
+        ->toThrow(ChannelAlreadyRegisteredException::class);
+
+    // La primera Organization permanece intacta — nada del segundo intento
+    // (ni la Organization "Otro Negocio" en sí, ni su Location/Resource/Service)
+    // llegó a persistir.
+    expect(Organization::count())->toBe(1);
+    expect(Organization::first()->id)->toBe($first->organizationId);
+    expect(Organization::where('name', 'Otro Negocio')->exists())->toBeFalse();
+
+    expect(DB::table('channel_organization')->where('channel_id', $channel->id)->count())->toBe(1);
 });

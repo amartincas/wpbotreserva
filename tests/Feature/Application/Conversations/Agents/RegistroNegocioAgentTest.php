@@ -8,6 +8,7 @@ use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
 use App\Application\Tenancy\RegisterOrganizationCommand;
+use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Contracts\AiServiceInterface;
 use App\Domain\Conversational\ConversationSession;
@@ -223,22 +224,116 @@ test('si los 3 campos fijos ya están respondidos pero todavía no arrancó la f
     expect($drafts->get($session)['services'])->toBe([]);
 });
 
-test('re-pregunta con el motivo cuando el extractor no puede interpretar la respuesta en un campo que no es el nombre, sin avanzar el draft', function () {
+/**
+ * Fase 6: ciudad y dirección pasaron de AiFieldExtractor a
+ * FreeTextFieldExtractor (ver docblock del FlowStep en RegistroNegocioAgent)
+ * — ya no existe un concepto de "respuesta inválida" para ninguno de los
+ * dos campos (cualquier texto no vacío es válido tal cual, mismo criterio
+ * que organizationDescription). El test que antes vivía acá demostraba el
+ * camino genérico "el extractor falla → re-pregunta con el motivo" usando
+ * "city" como campo de ejemplo — ya no es un ejemplo válido porque "city"
+ * ya nunca falla. Ese camino genérico sigue existiendo en el código
+ * (FlowProgressStatus::Invalid en handle()), pero el único FlowStep fijo
+ * que todavía puede fallar es organizationName, que tiene su propio
+ * comportamiento especial (confirmación en vez de re-preguntar) ya probado
+ * arriba — no queda ningún FlowStep fijo "genérico" sobre el que
+ * demostrarlo sin inventar un escenario artificial.
+ */
+test('ciudad y dirección válidas se guardan tal cual y el flujo continúa', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
-    // Arranca ya con el nombre puesto para que el campo actual sea "city",
-    // no "organizationName" (ese campo tiene su propio comportamiento,
-    // probado aparte abajo).
-    $drafts->put($session, ['_started' => true, 'organizationName' => 'Restaurante El Sabor']);
     $sent = [];
-    $ai = registroQueuedAi(['NO_ENCONTRADO']);
-    $agent = buildRegistroAgent($drafts, $sent, $ai);
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Restaurante El Sabor']));
 
-    $agent->handle(registroFixtureMessage('asdkjhasd'), $session);
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
+    $agent->handle(registroFixtureMessage('Bogotá'), $session);
+    $agent->handle(registroFixtureMessage('Calle 85 #12-34'), $session);
 
-    expect($sent)->toHaveCount(1);
-    expect($sent[0]['message'])->toContain('ciudad');
-    expect($drafts->get($session))->not->toHaveKey('city');
+    expect($drafts->get($session)['city'])->toBe('Bogotá');
+    expect($drafts->get($session)['address'])->toBe('Calle 85 #12-34');
+    expect($sent)->toHaveCount(5);
+    expect($sent[4]['message'])->toContain('negocio'); // pregunta de organizationDescription
+});
+
+test('ciudad omitida con "no" guarda NULL y la dirección se sigue preguntando normal', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Restaurante El Sabor']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session);
+
+    expect($drafts->get($session)['city'])->toBeNull();
+    expect($sent[3]['message'])->toContain('dirección');
+
+    $agent->handle(registroFixtureMessage('Calle 85 #12-34'), $session);
+
+    expect($drafts->get($session)['address'])->toBe('Calle 85 #12-34');
+});
+
+test('dirección omitida con "no" guarda NULL, la ciudad queda con el valor dado', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Restaurante El Sabor']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
+    $agent->handle(registroFixtureMessage('Bogotá'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session);
+
+    expect($drafts->get($session)['city'])->toBe('Bogotá');
+    expect($drafts->get($session)['address'])->toBeNull();
+});
+
+test('ciudad y dirección ambas omitidas: ambas quedan NULL y el flujo sigue sin romper', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Restaurante El Sabor']));
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Restaurante El Sabor'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session);
+
+    expect($drafts->get($session)['city'])->toBeNull();
+    expect($drafts->get($session)['address'])->toBeNull();
+    expect($sent)->toHaveCount(5);
+    expect($sent[4]['message'])->toContain('negocio'); // pregunta de organizationDescription, el flujo no se trabó
+});
+
+test('ciudad/dirección NULL se persisten correctamente en Location al confirmar el registro', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sessions = new EloquentConversationSessionRepository;
+    $sessions->recordIntent($session, Intent::RegistroNegocio);
+
+    $drafts->put($session, [
+        '_started' => true,
+        '_awaiting_confirmation' => true,
+        'organizationName' => 'Restaurante El Sabor',
+        'city' => null,
+        'address' => null,
+        'services' => [
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'description' => null, 'price' => null, 'resourceKeys' => [0]],
+        ],
+        'resources' => [
+            ['name' => 'Carlos', 'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')]],
+        ],
+    ]);
+
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
+
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    $location = Organization::first()->locations()->first();
+    expect($location->city)->toBeNull();
+    expect($location->address)->toBeNull();
 });
 
 test('caso real (segunda ronda): si la IA rechaza de plano el nombre del negocio (NO_ENCONTRADO), usa la respuesta cruda como candidato y confirma en vez de repetir "no entendí"', function () {
@@ -360,11 +455,11 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     $drafts = registroFakeDraftRepository();
     $sent = [];
     // '30'/'45' ya no van en la cola: la duración numérica desnuda ahora es
-    // determinista (DurationFieldExtractor), no consume la IA.
+    // determinista (DurationFieldExtractor), no consume la IA. Fase 6:
+    // 'Bogotá'/'Calle 15 #20-10' tampoco van más — ciudad/dirección son
+    // FreeTextFieldExtractor, nunca llaman a la IA.
     $ai = registroQueuedAi([
         'Restaurante El Sabor',
-        'Bogotá',
-        'Calle 15 #20-10',
         'Corte de cabello',
         'Carlos',
         'Corte + Barba',
@@ -428,10 +523,10 @@ test('post-E2E Fase 1 (Hallazgo 1, segunda ronda): negocio nuevo, primer servici
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sent = [];
+    // Fase 6: 'Cali'/'Carrera 10 #20-30' no van más en la cola — ciudad/
+    // dirección son FreeTextFieldExtractor, nunca llaman a la IA.
     $ai = registroQueuedAi([
         'Spa Lucía',
-        'Cali',
-        'Carrera 10 #20-30',
         'Masaje relajante',
         'Laura',
     ]);
@@ -630,11 +725,11 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     $drafts = registroFakeDraftRepository();
     $sent = [];
     // '45'/'30' ya no van en la cola: la duración numérica desnuda ahora es
-    // determinista (DurationFieldExtractor), no consume la IA.
+    // determinista (DurationFieldExtractor), no consume la IA. Fase 6:
+    // 'Cali'/'Carrera 10 #20-30' tampoco van más — ciudad/dirección son
+    // FreeTextFieldExtractor, nunca llaman a la IA.
     $ai = registroQueuedAi([
         'Spa Bienestar',
-        'Cali',
-        'Carrera 10 #20-30',
         'Masaje',
         'Laura',
         'Consulta',
@@ -746,7 +841,9 @@ test('Fase 2A: si el teléfono del profesional coincide con owner_phone, se acep
     $session = registroFixtureSession(); // customer_phone/ownerPhone = +573001234567
     $drafts = registroFakeDraftRepository();
     $sent = [];
-    $ai = registroQueuedAi(['Spa Lucía', 'Cali', 'Carrera 10 #20-30', 'Masaje relajante', 'Laura']);
+    // Fase 6: 'Cali'/'Carrera 10 #20-30' no van más en la cola — ciudad/
+    // dirección son FreeTextFieldExtractor, nunca llaman a la IA.
+    $ai = registroQueuedAi(['Spa Lucía', 'Masaje relajante', 'Laura']);
     $agent = buildRegistroAgent($drafts, $sent, $ai);
 
     $agent->handle(registroFixtureMessage('hola'), $session);
@@ -771,4 +868,58 @@ test('Fase 2A: si el teléfono del profesional coincide con owner_phone, se acep
     // Coinciden porque el usuario lo escribió así, no porque el código haya
     // copiado uno al otro — Fase 2A prohíbe explícitamente ese fallback.
     expect($laura->contact_phone->value())->toBe($org->owner_phone);
+});
+
+/**
+ * Fase 6 — Cambio A.5, capa 2 disparada de verdad: simula que, entre el
+ * guard conversacional del Router (capa 1, ya pasado para llegar a este
+ * punto) y la confirmación final, otro proceso ganó la condición de carrera
+ * y ya registró este mismo Channel. RegisterOrganizationCommand lanza
+ * ChannelAlreadyRegisteredException — el Agent debe responder con el mismo
+ * mensaje que el guard, no con un error genérico, y dejar la sesión limpia.
+ */
+test('Fase 6: si el Channel ya se registró entre el guard y la confirmación (condición de carrera), responde claro en vez de romper', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sessions = new EloquentConversationSessionRepository;
+    $sessions->recordIntent($session, Intent::RegistroNegocio);
+
+    // "Otro proceso" ya registró este mismo Channel antes de esta confirmación.
+    (new RegisterOrganizationCommand(new UnlimitedEntitlementChecker))->handle(new RegisterOrganizationData(
+        organizationName: 'Ganó la carrera',
+        ownerPhone: '+573009999999',
+        channel: $session->channel,
+        city: null,
+        address: null,
+        services: [],
+        resources: [],
+    ));
+
+    $drafts->put($session, [
+        '_started' => true,
+        '_awaiting_confirmation' => true,
+        'organizationName' => 'Restaurante El Sabor',
+        'city' => 'Bogotá',
+        'address' => 'Calle 15 #20-10',
+        'services' => [
+            ['name' => 'Corte de cabello', 'durationMinutes' => 30, 'description' => null, 'price' => null, 'resourceKeys' => [0]],
+        ],
+        'resources' => [
+            ['name' => 'Carlos', 'weeklySchedule' => [new WeeklyScheduleSlot(1, '09:00', '17:00')]],
+        ],
+    ]);
+
+    $sent = [];
+    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
+
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    expect(Organization::count())->toBe(1); // nunca se creó "Restaurante El Sabor"
+    expect(Organization::first()->name)->toBe('Ganó la carrera');
+
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('ya está registrado');
+
+    expect($drafts->get($session))->toBe([]);
+    expect($session->fresh()->current_intent)->toBeNull();
 });

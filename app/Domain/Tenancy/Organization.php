@@ -70,8 +70,10 @@ class Organization extends Model
     }
 
     /**
-     * N:N por diseño (Parte XVI) — un canal puede atender varias
-     * organizaciones; nunca asumir que hay uno solo.
+     * BelongsToMany solo porque la relación pasa por el pivot
+     * channel_organization — un Channel se vincula a lo sumo a una
+     * Organization (Fase 6, UNIQUE(channel_id)); una Organization sí puede
+     * tener varios Channels (ej. más de un número de WhatsApp).
      */
     public function channels(): BelongsToMany
     {

@@ -3,6 +3,7 @@
 namespace App\Application\Tenancy;
 
 use App\Application\Contracts\EntitlementCheckerInterface;
+use App\Application\Exceptions\ChannelAlreadyRegisteredException;
 use App\Application\Exceptions\EntitlementDeniedException;
 use App\Domain\Scheduling\Resource;
 use App\Domain\Scheduling\ResourceSchedule;
@@ -11,6 +12,7 @@ use App\Domain\Scheduling\ServiceResourceRequirement;
 use App\Domain\Tenancy\Location;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ResourceType;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -32,9 +34,29 @@ class RegisterOrganizationCommand
                 'owner_phone' => $data->ownerPhone,
             ]);
 
-            $data->channel->organizations()->syncWithoutDetaching([
-                $organization->id => ['is_primary' => true],
-            ]);
+            // Fase 6 — capa 2 de la protección contra doble registro (la
+            // capa 1 es el guard de InboundMessageRouter, que cubre el caso
+            // común). La Organization tiene que existir primero porque acá
+            // recién se conoce su id — pero el vínculo se intenta ANTES de
+            // crear Location/Resources/Services, para fallar rápido sin
+            // hacer trabajo de más cuando sí va a fallar. UNIQUE(channel_id)
+            // en channel_organization es lo que detecta la condición de
+            // carrera real entre dos remitentes distintos del mismo Channel
+            // confirmando casi al mismo tiempo (el mutex de Redis del Job es
+            // por remitente, no por Channel, así que no los serializa entre
+            // sí — ver ChannelAlreadyRegisteredException). Si falla, el
+            // throw revierte toda la transacción: la Organization recién
+            // creada arriba nunca llega a persistir.
+            try {
+                $data->channel->organizations()->syncWithoutDetaching([
+                    $organization->id => ['is_primary' => true],
+                ]);
+            } catch (UniqueConstraintViolationException $e) {
+                throw new ChannelAlreadyRegisteredException(
+                    "El Channel #{$data->channel->id} ya tiene una Organization registrada.",
+                    previous: $e,
+                );
+            }
 
             $this->ensureEntitled($organization, 'scheduling.max_locations');
             $location = Location::create([

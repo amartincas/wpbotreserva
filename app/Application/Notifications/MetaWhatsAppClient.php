@@ -19,10 +19,10 @@ use Illuminate\Support\Facades\Http;
  * también el único lugar donde hace falta registrar mensajes salientes en
  * conversation_messages — sin tocar ningún Agent individualmente. Nunca se
  * completa organization_id acá: ChannelClientInterface solo recibe Channel,
- * y un Channel puede estar vinculado a más de una Organization (N:N real,
- * confirmado en datos de staging) — intentar adivinar cuál sería
- * exactamente el tipo de atribución incorrecta que esta misma tabla busca
- * evitar, así que queda NULL a propósito en todas las filas outbound.
+ * no la Organization ya resuelta por el Router/Agent que lo invoca —
+ * resolverla de nuevo acá solo para completar este campo de observabilidad
+ * sería una consulta extra fuera de lugar en el único punto de salida real
+ * hacia Meta, así que queda NULL a propósito en todas las filas outbound.
  */
 class MetaWhatsAppClient implements ChannelClientInterface
 {
