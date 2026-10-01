@@ -184,6 +184,64 @@ test('caso real: día de la semana + número de día ("lunes 31") resuelve la fe
     expect($result->value->toDateString())->toBe($nextMonday->toDateString());
 });
 
+/**
+ * Auditoría post-implementación de Fase 7: SpanishWeekdayNames::NAMES
+ * agregó la abreviatura "mar" (de "martes") para WeeklyScheduleFieldExtractor
+ * — pero matchWeekday() de ESTE extractor busca sobre la frase LIBRE
+ * completa del usuario, no sobre un token ya aislado, así que "mar" como
+ * palabra suelta (el sustantivo "el mar") quedaba interpretado como
+ * "martes" sin que el usuario lo haya dicho. Corregido restringiendo
+ * matchWeekday() a SAFE_WEEKDAY_NAMES (nombres completos + plurales,
+ * nunca abreviaturas), sin tocar SpanishWeekdayNames.php.
+ */
+test('caso real (auditoría post-implementación de Fase 7): "mar" suelto en una frase libre no se interpreta como "martes" — cae a la IA en vez de resolver incorrectamente', function () {
+    $nextTuesday = now()->startOfDay()->next(2)->toDateString(); // 2 = martes
+    $aiResponse = now()->addDays(20)->toDateString(); // deliberadamente lejos de "el próximo martes"
+    $extractor = new DateFieldExtractor(dateExtractorFakeService($aiResponse), config('app.timezone'));
+
+    $result = $extractor->extract('necesito turno cerca del mar', []);
+
+    expect($result->successful)->toBeTrue();
+    // Si el bug todavía existiera, esto habría resuelto determinista a
+    // $nextTuesday SIN llamar a la IA en absoluto — que el valor devuelto
+    // sea el de la IA (no el martes) prueba que matchWeekday() devolvió
+    // null correctamente y el flujo normal (no el determinista) corrió.
+    expect($result->value->toDateString())->not->toBe($nextTuesday);
+    expect($result->value->toDateString())->toBe($aiResponse);
+});
+
+test('caso real (auditoría post-implementación de Fase 7): otra frase natural con "mar" como sustantivo tampoco se interpreta como "martes"', function () {
+    $nextTuesday = now()->startOfDay()->next(2)->toDateString();
+    $aiResponse = now()->addDays(15)->toDateString();
+    $extractor = new DateFieldExtractor(dateExtractorFakeService($aiResponse), config('app.timezone'));
+
+    $result = $extractor->extract('prefiero un lugar con vista al mar, cualquier día está bien', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->not->toBe($nextTuesday);
+    expect($result->value->toDateString())->toBe($aiResponse);
+});
+
+test('"martes" (nombre completo) sigue resolviendo al próximo martes, sin llamar a la IA', function () {
+    $nextTuesday = now()->startOfDay()->next(2);
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi(), config('app.timezone'));
+
+    $result = $extractor->extract('martes', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->toBe($nextTuesday->toDateString());
+});
+
+test('"martes" dentro de una frase natural también resuelve correctamente, sin llamar a la IA', function () {
+    $nextTuesday = now()->startOfDay()->next(2);
+    $extractor = new DateFieldExtractor(dateExtractorNeverCalledAi(), config('app.timezone'));
+
+    $result = $extractor->extract('el martes que viene estaría bien para mí', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value->toDateString())->toBe($nextTuesday->toDateString());
+});
+
 test('caso real: fecha numérica con separador resuelve determinista, sin llamar a la IA, en cualquier orden día/mes que el número >12 permita distinguir', function () {
     // Construido para garantizar día > 12 (así "mes-día-año", el formato
     // real que reportó el bug, queda inequívocamente resuelto) y a la vez

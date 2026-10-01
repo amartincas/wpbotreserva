@@ -148,9 +148,45 @@ class DateFieldExtractor implements FieldExtractorInterface
         return null;
     }
 
+    /**
+     * Subconjunto de SpanishWeekdayNames::NAMES seguro para buscar como
+     * palabra suelta dentro de una frase libre COMPLETA — nunca las
+     * abreviaturas de 3 letras agregadas en Fase 7 para
+     * WeeklyScheduleFieldExtractor. Ese extractor solo compara un token ya
+     * aislado (un candidato a nombre de día, nunca una frase entera), así
+     * que una abreviatura corta ahí es segura; acá en cambio se busca sobre
+     * el mensaje completo del usuario, y una abreviatura como "mar" (de
+     * "martes") es también una palabra española común ("el mar") que puede
+     * aparecer sin ninguna intención de referirse a un día — caso real
+     * encontrado en la auditoría post-implementación de Fase 7:
+     * "necesito turno cerca del mar" resolvía a "martes" sin que el
+     * usuario lo haya dicho. Nombres completos y sus plurales
+     * (sábados/domingos) no tienen ese riesgo.
+     *
+     * Lista explícita (no un chequeo de longitud de string) a propósito:
+     * si en el futuro se agrega una abreviatura nueva a
+     * SpanishWeekdayNames::NAMES para el parser de horarios, no queda
+     * habilitada acá por accidente — hay que decidir explícitamente
+     * agregarla a esta lista también.
+     */
+    private const SAFE_WEEKDAY_NAMES = [
+        'domingo' => 0,
+        'domingos' => 0,
+        'lunes' => 1,
+        'martes' => 2,
+        'miercoles' => 3,
+        'miércoles' => 3,
+        'jueves' => 4,
+        'viernes' => 5,
+        'sabado' => 6,
+        'sábado' => 6,
+        'sabados' => 6,
+        'sábados' => 6,
+    ];
+
     private function matchWeekday(string $normalized): ?int
     {
-        foreach (SpanishWeekdayNames::NAMES as $name => $weekday) {
+        foreach (self::SAFE_WEEKDAY_NAMES as $name => $weekday) {
             if (preg_match('/\b'.$name.'\b/u', $normalized)) {
                 return $weekday;
             }

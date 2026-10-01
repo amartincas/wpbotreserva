@@ -555,6 +555,63 @@ test('post-E2E Fase 1 (Hallazgo 1, segunda ronda): negocio nuevo, primer servici
     expect($drafts->get($session)['_awaitingAddAnotherService'])->toBeTrue();
 });
 
+/**
+ * Fase 7 — integración real texto → ResourceSchedule: recorre el flujo
+ * completo (RegistroNegocioAgent → ServiceResourceSelectionFlow →
+ * WeeklyScheduleFieldExtractor → confirmación → RegisterOrganizationCommand)
+ * con un horario escrito usando formatos nuevos de esta fase (abreviaturas
+ * de día + minutos sin am/pm en el mismo mensaje), sin construir
+ * WeeklyScheduleSlot a mano en ningún punto — y verifica las filas reales
+ * de ResourceSchedule en base de datos.
+ */
+test('Fase 7: horario con abreviaturas y minutos ("lun a vie de 9 a 17, sáb de 9:30 a 13:15") se persiste correctamente en ResourceSchedule', function () {
+    $session = registroFixtureSession();
+    $drafts = registroFakeDraftRepository();
+    $sent = [];
+    $ai = registroQueuedAi([
+        'Spa Lucía',
+        'Masaje relajante',
+        'Laura',
+    ]);
+    $agent = buildRegistroAgent($drafts, $sent, $ai);
+
+    $agent->handle(registroFixtureMessage('hola'), $session);
+    $agent->handle(registroFixtureMessage('Spa Lucía'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin ciudad
+    $agent->handle(registroFixtureMessage('no'), $session); // sin dirección
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
+    $agent->handle(registroFixtureMessage('Masaje relajante'), $session);
+    $agent->handle(registroFixtureMessage('45 minutos'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
+    $agent->handle(registroFixtureMessage('no'), $session); // sin precio
+    $agent->handle(registroFixtureMessage('Laura'), $session);
+    $agent->handle(registroFixtureMessage('3011234567'), $session);
+    $agent->handle(registroFixtureMessage('lun a vie de 9 a 17, sáb de 9:30 a 13:15'), $session);
+    $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
+    $agent->handle(registroFixtureMessage('sí'), $session);
+
+    $org = Organization::firstOrFail();
+    $resource = $org->resources()->firstOrFail();
+    $schedules = $resource->schedules()->orderBy('weekday')->orderBy('start_time')->get();
+
+    expect($schedules)->toHaveCount(6);
+
+    // Domingo (weekday=0) no está presente: solo lun-vie + sábado.
+    expect($schedules->pluck('weekday')->all())->toBe([1, 2, 3, 4, 5, 6]);
+
+    // Lunes a viernes: 09:00-17:00 cada uno.
+    foreach ($schedules->take(5) as $weekdayRow) {
+        expect($weekdayRow->start_time)->toBe('09:00:00');
+        expect($weekdayRow->end_time)->toBe('17:00:00');
+    }
+
+    // Sábado: 09:30-13:15, con minutos reales.
+    $saturday = $schedules->last();
+    expect($saturday->weekday)->toBe(6);
+    expect($saturday->start_time)->toBe('09:30:00');
+    expect($saturday->end_time)->toBe('13:15:00');
+});
+
 test('una respuesta que no es ni sí ni no en "¿agregás otro servicio?" vuelve a preguntar, sin avanzar de fase', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();

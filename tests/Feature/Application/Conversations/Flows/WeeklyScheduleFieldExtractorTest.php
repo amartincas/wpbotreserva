@@ -297,3 +297,235 @@ test('cae al fallback de IA si algún segmento de la lista no es reconocible', f
     expect($result->successful)->toBeTrue();
     expect($result->value)->toHaveCount(1);
 });
+
+// --- Fase 7: abreviaturas de día, sin llamar a la IA ---
+
+test('reconoce cada abreviatura de día individualmente, sin llamar a la IA', function (string $abbr, int $expectedWeekday) {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract("{$abbr} de 9 a 17", []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value)->toHaveCount(1);
+    expect($result->value[0]->weekday)->toBe($expectedWeekday);
+})->with([
+    'dom' => ['dom', 0],
+    'lun' => ['lun', 1],
+    'mar' => ['mar', 2],
+    'mie' => ['mie', 3],
+    'mié' => ['mié', 3],
+    'jue' => ['jue', 4],
+    'vie' => ['vie', 5],
+    'sab' => ['sab', 6],
+    'sáb' => ['sáb', 6],
+]);
+
+test('"lun a vie de 9 a 17" (rango con abreviaturas) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('lun a vie de 9 a 17', []);
+
+    expect($result->successful)->toBeTrue();
+    expect(array_map(fn ($slot) => $slot->weekday, $result->value))->toBe([1, 2, 3, 4, 5]);
+});
+
+test('"lun, mié y vie de 9 a 17" (lista con coma, abreviaturas) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('lun, mié y vie de 9 a 17', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value)->toHaveCount(3);
+    expect(array_map(fn ($slot) => $slot->weekday, $result->value))->toBe([1, 3, 5]);
+    expect($result->value[0]->startTime)->toBe('09:00');
+    expect($result->value[0]->endTime)->toBe('17:00');
+});
+
+test('"sáb y dom de 9 a 13" (lista con "y", abreviaturas) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('sáb y dom de 9 a 13', []);
+
+    expect($result->successful)->toBeTrue();
+    expect(array_map(fn ($slot) => $slot->weekday, $result->value))->toBe([6, 0]);
+});
+
+// --- Fase 7: separación por coma — ambos usos no deben romperse entre sí ---
+
+test('la coma sigue separando segmentos completos independientes, sin regresión', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('lunes de 9 a 17, martes de 10 a 18', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value)->toHaveCount(2);
+    expect($result->value[0]->weekday)->toBe(1);
+    expect($result->value[0]->startTime)->toBe('09:00');
+    expect($result->value[0]->endTime)->toBe('17:00');
+    expect($result->value[1]->weekday)->toBe(2);
+    expect($result->value[1]->startTime)->toBe('10:00');
+    expect($result->value[1]->endTime)->toBe('18:00');
+});
+
+// --- Fase 7: plurales que difieren del singular ---
+
+test('"sábados de 9 a 13" (plural) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('sábados de 9 a 13', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value[0]->weekday)->toBe(6);
+});
+
+test('"domingos de 9 a 13" (plural) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('domingos de 9 a 13', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value[0]->weekday)->toBe(0);
+});
+
+// --- Fase 7: minutos en formato 24h sin AM/PM, sin llamar a la IA ---
+
+test('"9:30 a 17:45" (minutos, sin am/pm) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 9:30 a 17:45', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value[0]->startTime)->toBe('09:30');
+    expect($result->value[0]->endTime)->toBe('17:45');
+});
+
+test('"08:30 a 12:15" (minutos, sin am/pm) sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 08:30 a 12:15', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value[0]->startTime)->toBe('08:30');
+    expect($result->value[0]->endTime)->toBe('12:15');
+});
+
+test('franja doble con minutos, sin am/pm, sin llamar a la IA', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('jueves de 8:15 a 12:30 y de 14:00 a 18:45', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value)->toHaveCount(2);
+    expect($result->value[0]->startTime)->toBe('08:15');
+    expect($result->value[0]->endTime)->toBe('12:30');
+    expect($result->value[1]->startTime)->toBe('14:00');
+    expect($result->value[1]->endTime)->toBe('18:45');
+});
+
+/**
+ * Regresión crítica (Fase 7): antes de la corrección de granularidad de
+ * minuto, resolveHourPair(9, 9) veía "fin <= inicio" (comparando solo
+ * horas) y le sumaba 12 horas al resultado, convirtiendo un rango corto
+ * válido (09:15-09:45) en uno de 12.5 horas (09:15-21:45). Nunca debe
+ * volver a producir ese resultado.
+ */
+test('regresión crítica: "09:15 a 09:45" (mismo hora, sin am/pm) da 09:15–09:45, nunca 09:15–21:45', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 09:15 a 09:45', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value[0]->startTime)->toBe('09:15');
+    expect($result->value[0]->endTime)->toBe('09:45');
+});
+
+/**
+ * Mismo bug, ruta de sufijos explícitos (resolveExplicitSuffixes): ambos
+ * lados en la misma hora de reloj de 12h ("9pm") con minutos distintos.
+ */
+test('"9:15pm a 9:45pm" (mismo hora con am/pm explícito) resuelve determinista a 21:15–21:45', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 9:15pm a 9:45pm', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value[0]->startTime)->toBe('21:15');
+    expect($result->value[0]->endTime)->toBe('21:45');
+});
+
+// --- Fase 7: validación de rangos inválidos ---
+
+test('rango inválido ("17:00 a 09:00") nunca llega a persistencia — falla con mensaje claro', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 17:00 a 09:00', []);
+
+    expect($result->successful)->toBeFalse();
+    expect($result->reason)->not->toBeNull();
+});
+
+test('un slot de IA con weekday inválido falla en vez de llegar a persistencia', function () {
+    $json = json_encode([
+        ['weekday' => 9, 'start_time' => '09:00', 'end_time' => '17:00'],
+    ]);
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleFakeService($json));
+
+    $result = $extractor->extract('cualquier frase libre', []);
+
+    expect($result->successful)->toBeFalse();
+});
+
+test('un slot de IA con hora malformada falla en vez de llegar a persistencia', function () {
+    $json = json_encode([
+        ['weekday' => 1, 'start_time' => '9:00', 'end_time' => '17:00'],
+    ]);
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleFakeService($json));
+
+    $result = $extractor->extract('cualquier frase libre', []);
+
+    expect($result->successful)->toBeFalse();
+});
+
+test('un slot de IA con rango invertido falla en vez de llegar a persistencia', function () {
+    $json = json_encode([
+        ['weekday' => 1, 'start_time' => '17:00', 'end_time' => '09:00'],
+    ]);
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleFakeService($json));
+
+    $result = $extractor->extract('cualquier frase libre', []);
+
+    expect($result->successful)->toBeFalse();
+});
+
+// --- Fase 7: validación de solapamiento ---
+
+test('franjas solapadas el mismo día ("9 a 13" y "12 a 17") fallan, vía parser determinista', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 9 a 13 y de 12 a 17', []);
+
+    expect($result->successful)->toBeFalse();
+});
+
+test('franjas solapadas el mismo día fallan también cuando vienen de la IA', function () {
+    $json = json_encode([
+        ['weekday' => 1, 'start_time' => '09:00', 'end_time' => '13:00'],
+        ['weekday' => 1, 'start_time' => '12:00', 'end_time' => '17:00'],
+    ]);
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleFakeService($json));
+
+    $result = $extractor->extract('cualquier frase libre', []);
+
+    expect($result->successful)->toBeFalse();
+});
+
+test('franjas adyacentes el mismo día ("9 a 12" y "12 a 17") son válidas, no se consideran solapadas', function () {
+    $extractor = new WeeklyScheduleFieldExtractor(weeklyScheduleThrowingFakeService());
+
+    $result = $extractor->extract('Lunes de 9 a 12 y de 12 a 17', []);
+
+    expect($result->successful)->toBeTrue();
+    expect($result->value)->toHaveCount(2);
+    expect($result->value[0]->endTime)->toBe('12:00');
+    expect($result->value[1]->startTime)->toBe('12:00');
+});

@@ -100,7 +100,7 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
             return $this->failure();
         }
 
-        return FieldExtractionResult::success($slots);
+        return $this->validateSlots($slots);
     }
 
     private function failure(): FieldExtractionResult
@@ -109,6 +109,76 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
             $this->botMessages?->render('horario.no_entendido')
                 ?? 'No entendí el horario. ¿Podés escribirlo de nuevo? (ej: "Lunes a Viernes de 9 a 17")'
         );
+    }
+
+    /**
+     * Fase 7 — único punto de validación, llamado desde el camino
+     * determinista y desde el de IA por igual (ambos retornos de éxito
+     * pasan por acá), para que ninguno de los dos pueda producir un slot
+     * malformado que llegue hasta ResourceSchedule::create() y rompa con
+     * una excepción SQL en vez de una respuesta conversacional clara.
+     *
+     * @param  WeeklyScheduleSlot[]  $slots
+     */
+    private function validateSlots(array $slots): FieldExtractionResult
+    {
+        foreach ($slots as $slot) {
+            if ($slot->weekday < 0 || $slot->weekday > 6
+                || ! $this->isWellFormedTime($slot->startTime)
+                || ! $this->isWellFormedTime($slot->endTime)
+                || $this->toMinutes($slot->endTime) <= $this->toMinutes($slot->startTime)) {
+                return FieldExtractionResult::failure(
+                    $this->botMessages?->render('horario.rango_invalido')
+                        ?? 'Ese horario no es válido — la hora de fin tiene que ser posterior a la de inicio. ¿Podés escribirlo de nuevo?'
+                );
+            }
+        }
+
+        $byWeekday = [];
+
+        foreach ($slots as $slot) {
+            $byWeekday[$slot->weekday][] = $slot;
+        }
+
+        foreach ($byWeekday as $daySlots) {
+            $count = count($daySlots);
+
+            for ($i = 0; $i < $count; $i++) {
+                for ($j = $i + 1; $j < $count; $j++) {
+                    if ($this->overlaps($daySlots[$i], $daySlots[$j])) {
+                        return FieldExtractionResult::failure(
+                            $this->botMessages?->render('horario.solapado')
+                                ?? 'Dos de los horarios que diste se superponen el mismo día. ¿Podés revisarlos y escribirlos de nuevo?'
+                        );
+                    }
+                }
+            }
+        }
+
+        return FieldExtractionResult::success($slots);
+    }
+
+    private function isWellFormedTime(string $time): bool
+    {
+        return (bool) preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $time);
+    }
+
+    private function toMinutes(string $time): int
+    {
+        [$hour, $minute] = array_map('intval', explode(':', $time));
+
+        return $hour * 60 + $minute;
+    }
+
+    /**
+     * Intervalo semiabierto [inicio, fin) — dos franjas adyacentes (una
+     * termina exactamente cuando la otra empieza, ej. 09:00-12:00 y
+     * 12:00-17:00) nunca se consideran solapadas.
+     */
+    private function overlaps(WeeklyScheduleSlot $a, WeeklyScheduleSlot $b): bool
+    {
+        return $this->toMinutes($a->startTime) < $this->toMinutes($b->endTime)
+            && $this->toMinutes($b->startTime) < $this->toMinutes($a->endTime);
     }
 
     /**
@@ -125,18 +195,45 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
      * CUALQUIER bloque de la lista no matchea la gramática reconocida acá,
      * se descarta el mensaje entero y se cae al fallback de IA — nunca un
      * resultado parcial.
+     *
+     * Fase 7: la coma también puede separar días DENTRO de un mismo bloque
+     * ("lun, mié y vie de 9 a 17"), no solo bloques completos entre sí
+     * ("lunes de 9 a 17, martes de 10 a 18"). Se distinguen acumulando
+     * fragmentos separados por coma hasta encontrar uno que contenga " de "
+     * (el separador días/horas) — ESE fragmento acumulado es el bloque
+     * completo; cualquier fragmento previo sin " de " es, por construcción,
+     * una continuación de la lista de días del bloque que todavía no
+     * cerró, nunca un bloque independiente. Si al final queda un fragmento
+     * sin cerrar (nunca encontró su " de "), el mensaje entero se descarta
+     * igual que cualquier otro patrón no reconocido.
      */
     private function tryDeterministicParse(string $text): ?FieldExtractionResult
     {
-        $segments = array_map('trim', explode(',', mb_strtolower(trim($text))));
-        $slots = [];
+        $rawParts = array_map('trim', explode(',', mb_strtolower(trim($text))));
+        $blocks = [];
+        $pending = [];
 
-        foreach ($segments as $segment) {
-            if ($segment === '') {
+        foreach ($rawParts as $part) {
+            if ($part === '') {
                 continue;
             }
 
-            $parsed = $this->parseSegment($segment);
+            $pending[] = $part;
+
+            if (str_contains($part, ' de ')) {
+                $blocks[] = implode(', ', $pending);
+                $pending = [];
+            }
+        }
+
+        if ($pending !== []) {
+            return null;
+        }
+
+        $slots = [];
+
+        foreach ($blocks as $block) {
+            $parsed = $this->parseSegment($block);
 
             if ($parsed === null) {
                 return null;
@@ -149,7 +246,7 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
             return null;
         }
 
-        return FieldExtractionResult::success($slots);
+        return $this->validateSlots($slots);
     }
 
     /**
@@ -194,7 +291,11 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
 
     /**
      * "lunes a viernes" (rango) o "lunes y martes" / "jueves" (lista de uno
-     * o más días).
+     * o más días) — la lista también acepta coma como conector ("lun, mié y
+     * vie"), normalizada acá mismo a " y " antes de separar, para no
+     * duplicar la lógica de abajo. Nunca se normaliza dentro de un rango
+     * ("lun a mié, vie" no es una forma soportada — cae a IA si aparece,
+     * fuera de alcance de Fase 7).
      *
      * @return int[]|null
      */
@@ -212,6 +313,7 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
             return $this->expandWeekdayRange($fromIndex, $toIndex);
         }
 
+        $daysPart = str_replace([', ', ','], ' y ', $daysPart);
         $weekdays = [];
 
         foreach (explode(' y ', $daysPart) as $name) {
@@ -306,9 +408,9 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
         }
 
         $resolved = match (true) {
-            $startSuffix !== '' && $endSuffix !== '' => $this->resolveExplicitSuffixes($startHour, $startSuffix, $endHour, $endSuffix),
+            $startSuffix !== '' && $endSuffix !== '' => $this->resolveExplicitSuffixes($startHour, $startMinute, $startSuffix, $endHour, $endMinute, $endSuffix),
             // Ninguno de los dos tiene sufijo — ruta existente, sin tocar.
-            $startSuffix === '' && $endSuffix === '' => $this->resolveHourPair($startHour, $endHour),
+            $startSuffix === '' && $endSuffix === '' => $this->resolveHourPair($startHour, $startMinute, $endHour, $endMinute),
             // Un solo lado con sufijo ("8am a 12"): genuinamente ambiguo —
             // no se interpreta el "12" suelto como 12pm por su cuenta,
             // se cae al fallback de IA en vez de adivinar.
@@ -329,16 +431,22 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
 
     /**
      * Resolución explícita cuando AMBOS extremos traen sufijo am/pm — sin
-     * heurística, conversión directa de reloj de 12h a 24h.
+     * heurística, conversión directa de reloj de 12h a 24h. Comparación a
+     * nivel de minuto completo (Fase 7) — comparar solo horas rechazaría de
+     * forma incorrecta un rango corto dentro de la misma hora, ej. "9:15pm
+     * a 9:45pm" (ambas horas resueltas en 21, pero 21:45 > 21:15 sí es un
+     * rango válido).
      *
      * @return array{0: int, 1: int}|null
      */
-    private function resolveExplicitSuffixes(int $startHour, string $startSuffix, int $endHour, string $endSuffix): ?array
+    private function resolveExplicitSuffixes(int $startHour, int $startMinute, string $startSuffix, int $endHour, int $endMinute, string $endSuffix): ?array
     {
         $resolvedStart = $this->to24Hour($startHour, $startSuffix);
         $resolvedEnd = $this->to24Hour($endHour, $endSuffix);
 
-        return $resolvedEnd > $resolvedStart ? [$resolvedStart, $resolvedEnd] : null;
+        return ($resolvedEnd * 60 + $endMinute) > ($resolvedStart * 60 + $startMinute)
+            ? [$resolvedStart, $resolvedEnd]
+            : null;
     }
 
     /**
@@ -367,21 +475,30 @@ class WeeklyScheduleFieldExtractor implements FieldExtractorInterface
      *    al ser menor, es de la tarde (+12) → 8 a 14. Este dominio nunca
      *    cruza la medianoche.
      *
+     * Fase 7: todas las comparaciones de esta heurística pasaron de "solo
+     * hora" a "hora*60+minuto" — bug real encontrado al diseñar el soporte
+     * de minutos: con solo horas, "09:15 a 09:45" (mismo hora, 9<=9) caía
+     * en la rama "$endHour <= $startHour" y terminaba en "09:15 a 21:45"
+     * (le sumaba 12 horas a un rango que ya era válido de 30 minutos). La
+     * granularidad de minuto evita ese falso disparo sin cambiar ningún
+     * caso ya probado que solo usa horas enteras (incluido ahí, minuto=0
+     * en ambos lados se comporta exactamente igual que antes).
+     *
      * @return array{0: int, 1: int}|null
      */
-    private function resolveHourPair(int $startHour, int $endHour): ?array
+    private function resolveHourPair(int $startHour, int $startMinute, int $endHour, int $endMinute): ?array
     {
         if ($startHour > 12 || $endHour > 12) {
-            return $endHour > $startHour ? [$startHour, $endHour] : null;
+            return ($endHour * 60 + $endMinute) > ($startHour * 60 + $startMinute) ? [$startHour, $endHour] : null;
         }
 
         if ($startHour < 8) {
             $startHour += 12;
             $endHour += 12;
-        } elseif ($endHour <= $startHour) {
+        } elseif (($endHour * 60 + $endMinute) <= ($startHour * 60 + $startMinute)) {
             $endHour += 12;
         }
 
-        return $endHour > $startHour ? [$startHour, $endHour] : null;
+        return ($endHour * 60 + $endMinute) > ($startHour * 60 + $startMinute) ? [$startHour, $endHour] : null;
     }
 }

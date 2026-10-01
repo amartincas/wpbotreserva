@@ -13,7 +13,12 @@ namespace App\Application\Conversations\Flows;
 final class SpanishWeekdayNames
 {
     public const NAMES = [
+        // Formas completas — lunes/martes/miércoles/jueves/viernes son
+        // invariantes singular=plural en español, no necesitan entrada
+        // extra para eso (Fase 7). sábado/domingo sí difieren del plural,
+        // así que esos dos llevan una entrada adicional cada uno.
         'domingo' => 0,
+        'domingos' => 0,
         'lunes' => 1,
         'martes' => 2,
         'miercoles' => 3,
@@ -22,6 +27,18 @@ final class SpanishWeekdayNames
         'viernes' => 5,
         'sabado' => 6,
         'sábado' => 6,
+        'sabados' => 6,
+        'sábados' => 6,
+        // Abreviaturas (Fase 7), con y sin tilde donde aplica.
+        'dom' => 0,
+        'lun' => 1,
+        'mar' => 2,
+        'mie' => 3,
+        'mié' => 3,
+        'jue' => 4,
+        'vie' => 5,
+        'sab' => 6,
+        'sáb' => 6,
     ];
 
     /**
