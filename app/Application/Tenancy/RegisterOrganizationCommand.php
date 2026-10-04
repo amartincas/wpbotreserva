@@ -3,8 +3,8 @@
 namespace App\Application\Tenancy;
 
 use App\Application\Contracts\EntitlementCheckerInterface;
-use App\Application\Exceptions\ChannelAlreadyRegisteredException;
 use App\Application\Exceptions\EntitlementDeniedException;
+use App\Application\Exceptions\OwnerAlreadyRegisteredException;
 use App\Domain\Scheduling\Resource;
 use App\Domain\Scheduling\ResourceSchedule;
 use App\Domain\Scheduling\Service;
@@ -28,35 +28,29 @@ class RegisterOrganizationCommand
     public function handle(RegisterOrganizationData $data): RegisterOrganizationResult
     {
         return DB::transaction(function () use ($data) {
-            $organization = Organization::create([
-                'name' => $data->organizationName,
-                'description' => $data->organizationDescription,
-                'owner_phone' => $data->ownerPhone,
-            ]);
-
-            // Fase 6 — capa 2 de la protección contra doble registro (la
-            // capa 1 es el guard de InboundMessageRouter, que cubre el caso
-            // común). La Organization tiene que existir primero porque acá
-            // recién se conoce su id — pero el vínculo se intenta ANTES de
-            // crear Location/Resources/Services, para fallar rápido sin
-            // hacer trabajo de más cuando sí va a fallar. UNIQUE(channel_id)
-            // en channel_organization es lo que detecta la condición de
-            // carrera real entre dos remitentes distintos del mismo Channel
-            // confirmando casi al mismo tiempo (el mutex de Redis del Job es
-            // por remitente, no por Channel, así que no los serializa entre
-            // sí — ver ChannelAlreadyRegisteredException). Si falla, el
-            // throw revierte toda la transacción: la Organization recién
-            // creada arriba nunca llega a persistir.
+            // B5 — protección contra doble registro (capa 2; la capa 1 es el
+            // guard de InboundMessageRouter): UNIQUE(owner_phone) es lo que
+            // detecta, también ante una carrera real, que este owner ya
+            // tiene una Organization. Es lo PRIMERO que se inserta, para
+            // fallar antes de crear Location/Resources/Services; el throw
+            // revierte toda la transacción.
             try {
-                $data->channel->organizations()->syncWithoutDetaching([
-                    $organization->id => ['is_primary' => true],
+                $organization = Organization::create([
+                    'name' => $data->organizationName,
+                    'description' => $data->organizationDescription,
+                    'owner_phone' => $data->ownerPhone,
                 ]);
             } catch (UniqueConstraintViolationException $e) {
-                throw new ChannelAlreadyRegisteredException(
-                    "El Channel #{$data->channel->id} ya tiene una Organization registrada.",
+                throw new OwnerAlreadyRegisteredException(
+                    "El owner {$data->ownerPhone} ya tiene una Organization registrada.",
                     previous: $e,
                 );
             }
+
+            // El registro ya no vincula ningún Channel (B5): el onboarding
+            // ocurre en el número CENTRAL, que no pertenece a ninguna
+            // Organization. El WhatsApp propio del negocio (BUSINESS) se
+            // conecta después, aparte (B9).
 
             $this->ensureEntitled($organization, 'scheduling.max_locations');
             $location = Location::create([
@@ -74,7 +68,6 @@ class RegisterOrganizationCommand
                     'location_id' => $location->id,
                     'resource_type' => ResourceType::HUMAN,
                     'display_name' => $resourceData->name,
-                    'contact_phone' => $resourceData->contactPhone,
                 ]);
 
                 foreach ($resourceData->weeklySchedule as $slot) {

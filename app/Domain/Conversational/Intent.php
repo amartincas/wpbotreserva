@@ -46,21 +46,23 @@ namespace App\Domain\Conversational;
  * "No" de este flujo entrega el control a GestionReserva sin duplicar su
  * lógica — ver ConfirmacionAsistenciaAgent.
  *
- * AgendaProfesional (Fase 4): consulta de agenda de un profesional
- * (Resource, no el dueño) — la produce DeterministicAgendaProfesionalStrategy,
- * nunca la IA. Gatea por Resource.contact_phone (nunca
- * Organization.owner_phone, ese es el gate de AdminCommand) vía
- * ProfessionalResolver, siempre scoped a la Organization ya resuelta. Un
+ * AgendaProfesional (Fase 4; B7: del owner): consulta de la agenda de toda
+ * la Organization desde el CENTRAL — la produce
+ * DeterministicAgendaProfesionalStrategy, nunca la IA. Gatea por
+ * Organization.owner_phone (mismo gate que AdminCommand; antes, por
+ * el teléfono propio del profesional), siempre scoped a la
+ * Organization ya resuelta. Un
  * solo Intent para "cuántas"/"qué" — igual criterio que AdminCommand: el
  * Intent identifica el Agent, no la acción puntual (ver AgendaProfesionalAgent).
  *
  * RegistroNegocioBloqueado (Fase 6): mismo criterio que ReservaOGestion —
  * NINGÚN IntentClassifierStrategy lo produce nunca. Es una sustitución que
  * hace InboundMessageRouter sobre un RegistroNegocio ya clasificado, cuando
- * el Channel ya resuelve a una Organization existente en un arranque de
- * conversación nuevo (nunca a mitad de un registro ya en curso) — evita que
- * RegistroNegocioAgent corra de nuevo y cree una segunda Organization para
- * el mismo Channel. Ver InboundMessageRouter y RegistroNegocioBloqueadoAgent.
+ * el owner que escribe al CENTRAL ya resuelve a una Organization (B5: por
+ * owner_phone) en un arranque de conversación nuevo (nunca a mitad de un
+ * registro ya en curso) — evita que RegistroNegocioAgent corra de nuevo y
+ * cree una segunda Organization para el mismo owner. Ver
+ * InboundMessageRouter y RegistroNegocioBloqueadoAgent.
  *
  * RegistroNegocioExpirado (Fase 6): sí lo produce un Strategy determinista
  * (ExpiredRegistroNegocioStrategy), pero nunca a partir de analizar el

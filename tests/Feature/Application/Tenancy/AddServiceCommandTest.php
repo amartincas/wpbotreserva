@@ -34,12 +34,14 @@ function addServiceFixtureOrganization(int $resourceCount = 1): Organization
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: '+573009999999',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30)],
         resources: $resources,
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }

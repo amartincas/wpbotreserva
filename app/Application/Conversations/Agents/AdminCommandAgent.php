@@ -7,7 +7,8 @@ use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\ConfirmBookingCommand;
 use App\Application\Booking\MarkBookingNoShowCommand;
 use App\Application\Contracts\AgentInterface;
-use App\Application\Contracts\NotificationSenderInterface;
+use App\Application\Contracts\ConversationSessionRepositoryInterface;
+use App\Application\Conversations\ConversationReplier;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Exceptions\BookingAlreadyTerminalException;
 use App\Domain\Conversational\ConversationSession;
@@ -21,7 +22,11 @@ use Illuminate\Support\Collection;
  * (Incremento 2, Parte VII) — sin FlowStep/draft: cada comando llega
  * completo en un único mensaje (DeterministicAdminCommandStrategy ya
  * garantizó el match exacto antes de clasificar Intent::AdminCommand), así
- * que no hay estado que mantener entre turnos.
+ * que no hay estado que mantener entre turnos. Por eso mismo limpia
+ * current_intent al terminar (B3): si quedara activo, cualquier texto libre
+ * posterior del owner volvería acá por continuidad y recibiría "Comando no
+ * reconocido." durante todo el TTL. Responde por el Channel de la sesión
+ * (ConversationReplier), no por el de la Organization.
  *
  * `$organization->bookings()->find($id)` (no Booking::find()) es lo que
  * hace que "cancelar <id>" nunca pueda tocar la reserva de OTRO negocio —
@@ -31,7 +36,8 @@ use Illuminate\Support\Collection;
 class AdminCommandAgent implements AgentInterface
 {
     public function __construct(
-        private readonly NotificationSenderInterface $notifications,
+        private readonly ConversationReplier $replier,
+        private readonly ConversationSessionRepositoryInterface $sessions,
         private readonly CancelBookingCommand $cancelBooking,
         private readonly ConfirmBookingCommand $confirmBooking,
         private readonly MarkBookingNoShowCommand $markNoShowBooking,
@@ -40,34 +46,43 @@ class AdminCommandAgent implements AgentInterface
 
     public function handle(InboundMessage $message, ConversationSession $session, Organization $organization): void
     {
+        try {
+            $this->execute($message, $session, $organization);
+        } finally {
+            $this->sessions->recordIntent($session, null);
+        }
+    }
+
+    private function execute(InboundMessage $message, ConversationSession $session, Organization $organization): void
+    {
         $text = trim($message->text);
 
         if (preg_match('/^reservas\s+hoy$/iu', $text)) {
-            $this->listForDate($organization, $message->fromPhone, CarbonImmutable::now($organization->timezone), 'hoy');
+            $this->listForDate($session, $organization, $message->fromPhone, CarbonImmutable::now($organization->timezone), 'hoy');
 
             return;
         }
 
         if (preg_match('/^reservas\s+(\d{1,2})\/(\d{1,2})\/(\d{4})$/iu', $text, $matches)) {
-            $this->listForRequestedDate($organization, $message->fromPhone, (int) $matches[1], (int) $matches[2], (int) $matches[3]);
+            $this->listForRequestedDate($session, $organization, $message->fromPhone, (int) $matches[1], (int) $matches[2], (int) $matches[3]);
 
             return;
         }
 
         if (preg_match('/^cancelar\s+(\d+)$/iu', $text, $matches)) {
-            $this->cancel($organization, $message->fromPhone, (int) $matches[1]);
+            $this->cancel($session, $organization, $message->fromPhone, (int) $matches[1]);
 
             return;
         }
 
         if (preg_match('/^confirmar\s+(\d+)$/iu', $text, $matches)) {
-            $this->confirm($organization, $message->fromPhone, (int) $matches[1]);
+            $this->confirm($session, $organization, $message->fromPhone, (int) $matches[1]);
 
             return;
         }
 
         if (preg_match('/^ausente\s+(\d+)$/iu', $text, $matches)) {
-            $this->markNoShow($organization, $message->fromPhone, (int) $matches[1]);
+            $this->markNoShow($session, $organization, $message->fromPhone, (int) $matches[1]);
 
             return;
         }
@@ -75,7 +90,7 @@ class AdminCommandAgent implements AgentInterface
         // No debería ocurrir: DeterministicAdminCommandStrategy ya validó el
         // mismo patrón antes de clasificar Intent::AdminCommand. Devuelve un
         // mensaje en vez de romper si algún día ese contrato se desalinea.
-        $this->reply($organization, $message->fromPhone, 'Comando no reconocido.');
+        $this->reply($session, $message->fromPhone, 'Comando no reconocido.');
     }
 
     /**
@@ -84,17 +99,17 @@ class AdminCommandAgent implements AgentInterface
      * checkdate() es la validación de calendario real de PHP, exactamente
      * lo que hace falta antes de aceptar una fecha que un dueño tipeó a mano.
      */
-    private function listForRequestedDate(Organization $organization, string $toPhone, int $day, int $month, int $year): void
+    private function listForRequestedDate(ConversationSession $session, Organization $organization, string $toPhone, int $day, int $month, int $year): void
     {
         if (! checkdate($month, $day, $year)) {
-            $this->reply($organization, $toPhone, 'Esa fecha no es válida. Usá el formato dd/mm/aaaa.');
+            $this->reply($session, $toPhone, 'Esa fecha no es válida. Usá el formato dd/mm/aaaa.');
 
             return;
         }
 
         $date = CarbonImmutable::create($year, $month, $day, timezone: $organization->timezone);
 
-        $this->listForDate($organization, $toPhone, $date, $date->format('d/m/Y'));
+        $this->listForDate($session, $organization, $toPhone, $date, $date->format('d/m/Y'));
     }
 
     /**
@@ -102,25 +117,25 @@ class AdminCommandAgent implements AgentInterface
      * observable de siempre (excluye CANCELLED, sin filtro de Resource),
      * ahora compartido con AgendaProfesionalAgent en vez de duplicado.
      */
-    private function listForDate(Organization $organization, string $toPhone, CarbonImmutable $date, string $label): void
+    private function listForDate(ConversationSession $session, Organization $organization, string $toPhone, CarbonImmutable $date, string $label): void
     {
         $bookings = $this->agenda->forDate($organization, $date);
 
         if ($bookings->isEmpty()) {
-            $this->reply($organization, $toPhone, "No tenés reservas para {$label}.");
+            $this->reply($session, $toPhone, "No tenés reservas para {$label}.");
 
             return;
         }
 
-        $this->reply($organization, $toPhone, "Reservas de {$label}:\n\n".$this->formatBookingList($bookings, $organization));
+        $this->reply($session, $toPhone, "Reservas de {$label}:\n\n".$this->formatBookingList($bookings, $organization));
     }
 
-    private function cancel(Organization $organization, string $toPhone, int $bookingId): void
+    private function cancel(ConversationSession $session, Organization $organization, string $toPhone, int $bookingId): void
     {
         $booking = $organization->bookings()->find($bookingId);
 
         if ($booking === null) {
-            $this->reply($organization, $toPhone, "No encontré la reserva #{$bookingId}.");
+            $this->reply($session, $toPhone, "No encontré la reserva #{$bookingId}.");
 
             return;
         }
@@ -128,20 +143,20 @@ class AdminCommandAgent implements AgentInterface
         try {
             $this->cancelBooking->handle($booking, 'Cancelado por el negocio vía comando admin');
         } catch (BookingAlreadyTerminalException) {
-            $this->reply($organization, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
+            $this->reply($session, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
 
             return;
         }
 
-        $this->reply($organization, $toPhone, "Listo, cancelé la reserva #{$bookingId}.");
+        $this->reply($session, $toPhone, "Listo, cancelé la reserva #{$bookingId}.");
     }
 
-    private function confirm(Organization $organization, string $toPhone, int $bookingId): void
+    private function confirm(ConversationSession $session, Organization $organization, string $toPhone, int $bookingId): void
     {
         $booking = $organization->bookings()->find($bookingId);
 
         if ($booking === null) {
-            $this->reply($organization, $toPhone, "No encontré la reserva #{$bookingId}.");
+            $this->reply($session, $toPhone, "No encontré la reserva #{$bookingId}.");
 
             return;
         }
@@ -149,12 +164,12 @@ class AdminCommandAgent implements AgentInterface
         try {
             $this->confirmBooking->handle($booking);
         } catch (BookingAlreadyTerminalException) {
-            $this->reply($organization, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
+            $this->reply($session, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
 
             return;
         }
 
-        $this->reply($organization, $toPhone, "Listo, confirmé la reserva #{$bookingId}.");
+        $this->reply($session, $toPhone, "Listo, confirmé la reserva #{$bookingId}.");
     }
 
     /**
@@ -165,12 +180,12 @@ class AdminCommandAgent implements AgentInterface
      * (el caso real que motivó este comando: revertir un auto-completado
      * del respaldo de 7 días), markNoShow() la acepta sin problema.
      */
-    private function markNoShow(Organization $organization, string $toPhone, int $bookingId): void
+    private function markNoShow(ConversationSession $session, Organization $organization, string $toPhone, int $bookingId): void
     {
         $booking = $organization->bookings()->find($bookingId);
 
         if ($booking === null) {
-            $this->reply($organization, $toPhone, "No encontré la reserva #{$bookingId}.");
+            $this->reply($session, $toPhone, "No encontré la reserva #{$bookingId}.");
 
             return;
         }
@@ -178,12 +193,12 @@ class AdminCommandAgent implements AgentInterface
         try {
             $this->markNoShowBooking->handle($booking);
         } catch (BookingAlreadyTerminalException) {
-            $this->reply($organization, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
+            $this->reply($session, $toPhone, "La reserva #{$bookingId} ya estaba en un estado terminal.");
 
             return;
         }
 
-        $this->reply($organization, $toPhone, "Listo, marqué la reserva #{$bookingId} como ausente.");
+        $this->reply($session, $toPhone, "Listo, marqué la reserva #{$bookingId} como ausente.");
     }
 
     /**
@@ -206,8 +221,8 @@ class AdminCommandAgent implements AgentInterface
         ))->implode("\n");
     }
 
-    private function reply(Organization $organization, string $toPhone, string $text): void
+    private function reply(ConversationSession $session, string $toPhone, string $text): void
     {
-        $this->notifications->send($organization, $toPhone, $text);
+        $this->replier->send($session, $toPhone, $text);
     }
 }

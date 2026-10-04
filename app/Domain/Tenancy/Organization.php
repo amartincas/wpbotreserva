@@ -72,12 +72,14 @@ class Organization extends Model
     /**
      * BelongsToMany solo porque la relación pasa por el pivot
      * channel_organization — un Channel se vincula a lo sumo a una
-     * Organization (Fase 6, UNIQUE(channel_id)); una Organization sí puede
-     * tener varios Channels (ej. más de un número de WhatsApp).
+     * Organization (Fase 6, UNIQUE(channel_id)). Desde B2, una Organization
+     * tiene como máximo un Channel, siempre BUSINESS — lo hace cumplir el
+     * pivot ChannelOrganization.
      */
     public function channels(): BelongsToMany
     {
         return $this->belongsToMany(Channel::class, 'channel_organization')
+            ->using(ChannelOrganization::class)
             ->withPivot('is_primary')
             ->withTimestamps();
     }

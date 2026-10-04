@@ -6,9 +6,11 @@ use App\Application\Booking\ConfirmBookingCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
 use App\Application\Booking\MarkBookingNoShowCommand;
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
-use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
+use App\Application\Conversations\ConversationReplier;
+use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -18,32 +20,37 @@ use App\Domain\Booking\Booking;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
+use App\Domain\Conversational\Intent;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\BookingStatus;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use Carbon\CarbonImmutable;
 
-function adminAgentFakeNotificationSender(array &$sent): NotificationSenderInterface
+function adminAgentFakeReplier(array &$sent): ConversationReplier
 {
-    return new class($sent) implements NotificationSenderInterface
+    return new ConversationReplier(new class($sent) implements ChannelClientInterface
     {
         public function __construct(private array &$sent) {}
 
-        public function send(Organization $organization, string $toPhoneE164, string $message): void
+        public function sendTextMessage(Channel $channel, string $to, string $message): void
         {
-            $this->sent[] = compact('organization', 'toPhoneE164', 'message');
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'message' => $message];
         }
 
-        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void {}
 
-        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
-    };
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void
+        {
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'message' => $bodyText, 'buttons' => $buttons];
+        }
+    });
 }
 
-function adminAgentFixtureOrganization(string $phoneNumberId = 'wamid-admin-agent'): Organization
+function adminAgentFixtureOrganization(string $phoneNumberId = 'wamid-admin-agent', string $ownerPhone = '+573009999999'): Organization
 {
     $channel = Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
@@ -55,8 +62,7 @@ function adminAgentFixtureOrganization(string $phoneNumberId = 'wamid-admin-agen
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
-        ownerPhone: '+573009999999',
-        channel: $channel,
+        ownerPhone: $ownerPhone,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
@@ -65,6 +71,9 @@ function adminAgentFixtureOrganization(string $phoneNumberId = 'wamid-admin-agen
             range(0, 6)
         ))],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -101,7 +110,8 @@ function adminAgentFixtureBooking(Organization $organization, CarbonImmutable $s
 function buildAdminCommandAgent(array &$sent): AdminCommandAgent
 {
     return new AdminCommandAgent(
-        adminAgentFakeNotificationSender($sent),
+        adminAgentFakeReplier($sent),
+        new EloquentConversationSessionRepository,
         new CancelBookingCommand(app(BookingSchedulerInterface::class)),
         new ConfirmBookingCommand(app(BookingSchedulerInterface::class)),
         new MarkBookingNoShowCommand(app(BookingSchedulerInterface::class)),
@@ -237,7 +247,7 @@ test('"cancelar <id>" con un id inexistente responde que no la encontró, sin ro
 
 test('"cancelar <id>" nunca puede cancelar una reserva de OTRA organización', function () {
     $organizationA = adminAgentFixtureOrganization('wamid-admin-agent-a');
-    $organizationB = adminAgentFixtureOrganization('wamid-admin-agent-b');
+    $organizationB = adminAgentFixtureOrganization('wamid-admin-agent-b', ownerPhone: '+573008888888');
     $bookingOfB = adminAgentFixtureBooking($organizationB, now()->addDay()->setTime(10, 0));
     $sessionA = adminAgentFixtureSession($organizationA);
     $sent = [];
@@ -313,4 +323,43 @@ test('"ausente <id>" sobre una reserva cancelada avisa en vez de romper', functi
     $agent->handle(adminAgentFixtureMessage("ausente {$booking->id}"), $session, $organization);
 
     expect($sent[0]['message'])->toContain('ya estaba en un estado terminal');
+});
+
+test('B3: responde por el Channel de la sesión (CENTRAL), no por el Channel BUSINESS de la Organization', function () {
+    $organization = adminAgentFixtureOrganization('wamid-admin-agent-business');
+    $central = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'role' => ChannelRole::CENTRAL,
+        'phone_number_id' => 'wamid-admin-agent-central',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $session = ConversationSession::create([
+        'channel_id' => $central->id,
+        'customer_phone' => '+573009999999',
+        'organization_id' => $organization->id,
+    ]);
+    $sent = [];
+
+    buildAdminCommandAgent($sent)->handle(adminAgentFixtureMessage('reservas hoy'), $session, $organization);
+
+    expect($sent)->toHaveCount(1);
+    expect($sent[0]['channel']->is($central))->toBeTrue();
+    expect($sent[0]['channel']->is($organization->channels()->first()))->toBeFalse();
+});
+
+test('B3: un solo turno — limpia current_intent al terminar, también cuando el comando no se reconoce', function () {
+    $organization = adminAgentFixtureOrganization();
+    $session = adminAgentFixtureSession($organization);
+    $sent = [];
+    $agent = buildAdminCommandAgent($sent);
+
+    $session->update(['current_intent' => Intent::AdminCommand->value]);
+    $agent->handle(adminAgentFixtureMessage('reservas hoy'), $session, $organization);
+    expect($session->fresh()->current_intent)->toBeNull();
+
+    $session->update(['current_intent' => Intent::AdminCommand->value]);
+    $agent->handle(adminAgentFixtureMessage('hola, quiero cambiar el precio'), $session, $organization);
+    expect($sent[1]['message'])->toBe('Comando no reconocido.');
+    expect($session->fresh()->current_intent)->toBeNull();
 });

@@ -3,51 +3,51 @@
 namespace App\Application\Booking\Listeners;
 
 use App\Application\Booking\Notifications\ProfessionalNotificationIdempotency;
-use App\Application\Booking\Notifications\ProfessionalRecipientResolver;
-use App\Application\Booking\Notifications\ResolvedProfessionalRecipient;
-use App\Application\Contracts\NotificationSenderInterface;
+use App\Application\Contracts\OwnerNotifierInterface;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Events\BookingCancelled;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
+use Illuminate\Support\Facades\Log;
 
 /**
- * Fase 2B — reacción a BookingCancelled, versión profesional. Mismo
- * criterio que SendProfessionalBookingConfirmationNotification; ver ese
- * docblock para el razonamiento de ShouldQueueAfterCommit e independencia
- * del listener de cliente.
+ * Reacción a BookingCancelled del lado del negocio — avisa al OWNER por el
+ * CENTRAL (B6). Mismo criterio que SendOwnerBookingConfirmationNotification;
+ * ver ese docblock para ShouldQueueAfterCommit, el caso sin owner_phone y
+ * los reintentos.
  */
-class SendProfessionalBookingCancellationNotification implements ShouldQueue, ShouldQueueAfterCommit
+class SendOwnerBookingCancellationNotification implements ShouldQueue, ShouldQueueAfterCommit
 {
     private const TEMPLATE_NAME = 'reserva_cancelada_profesional';
 
     private const TEMPLATE_LANGUAGE = 'es';
 
     public function __construct(
-        private readonly ProfessionalRecipientResolver $resolver,
-        private readonly NotificationSenderInterface $sender,
+        private readonly OwnerNotifierInterface $owner,
         private readonly ProfessionalNotificationIdempotency $idempotency,
     ) {}
 
     public function handle(BookingCancelled $event): void
     {
         $booking = $event->booking;
-        $booking->loadMissing(['service', 'customer', 'organization', 'bookingResources.resource']);
+        $booking->loadMissing(['service', 'customer', 'organization']);
 
-        $recipient = $this->resolver->resolve($booking, 'cancellation');
+        if ($booking->organization->owner_phone === null) {
+            Log::warning('SendOwnerBookingCancellationNotification: la Organization no tiene owner_phone', [
+                'booking_id' => $booking->id,
+                'organization_id' => $booking->organization_id,
+            ]);
 
-        if ($recipient === null) {
             return;
         }
 
         $this->idempotency->onceFor(
             "cancellation:{$booking->id}",
-            fn () => $this->sender->sendTemplate(
-                $recipient->organization,
-                $recipient->contactPhone,
+            fn () => $this->owner->sendTemplate(
+                $booking->organization,
                 self::TEMPLATE_NAME,
                 self::TEMPLATE_LANGUAGE,
-                $this->bodyParameters($booking, $recipient),
+                $this->bodyParameters($booking),
             ),
         );
     }
@@ -55,9 +55,9 @@ class SendProfessionalBookingCancellationNotification implements ShouldQueue, Sh
     /**
      * @return string[]
      */
-    private function bodyParameters(Booking $booking, ResolvedProfessionalRecipient $recipient): array
+    private function bodyParameters(Booking $booking): array
     {
-        $localStartsAt = $booking->starts_at->setTimezone($recipient->organization->timezone);
+        $localStartsAt = $booking->starts_at->setTimezone($booking->organization->timezone);
 
         // {{5}} siempre se manda (Meta exige que el conteo de variables
         // coincida con el template aprobado) — vacío cuando no hay motivo,

@@ -7,10 +7,12 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\IntentClassifierInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Organizations\OrganizationResolutionStatus;
+use App\Application\Organizations\OwnerOrganizationResolver;
 use App\Domain\Booking\Contracts\ActiveBookingsFinderInterface;
 use App\Domain\Conversational\Events\InboundMessageRejected;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Conversational\Intent;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Orquestador puro (Parte XIII, validado antes del Hito 4): recibe un
@@ -39,6 +41,22 @@ use App\Domain\Conversational\Intent;
  * por un colaborador (ActiveBookingsFinderInterface), nunca una lectura
  * del contenido del mensaje.
  *
+ * B4 — routing por rol del Channel. Primero se resuelve el Channel por su
+ * phone_number_id y después se mira su `role` (nunca se deduce el rol de si
+ * tiene o no un vínculo en channel_organization):
+ *  - CENTRAL: la Organization sale del teléfono de quien escribe
+ *    (OwnerOrganizationResolver, owner_phone). Un CENTRAL vinculado a una
+ *    Organization es una inconsistencia (solo alcanzable con SQL manual):
+ *    se rechaza y se loguea como error, nunca se procesa.
+ *  - BUSINESS: la Organization sale del vínculo del Channel
+ *    (SingleOrganizationResolver). Sin vínculo → channel_unlinked; un
+ *    BUSINESS nunca abre un onboarding.
+ * Un resultado Inconsistent de cualquiera de los dos resolvers también se
+ * rechaza (fail closed). Después de clasificar y aplicar las sustituciones,
+ * AgentSelector::effectiveIntent() convierte un Intent que el rol no atiende
+ * en el FueraDeAlcance de ese rol — ANTES de recordIntent(), para que
+ * current_intent nunca quede con un Intent inválido para el Channel.
+ *
  * Asume que ya se serializó el procesamiento de esta conversación (mutex de
  * Redis en el Job que lo invoca, Hito 7) — no adquiere locks acá.
  */
@@ -47,7 +65,8 @@ class InboundMessageRouter
     public function __construct(
         private readonly ChannelResolverInterface $channels,
         private readonly ConversationSessionRepositoryInterface $sessions,
-        private readonly OrganizationResolverInterface $organizations,
+        private readonly OrganizationResolverInterface $businessOrganizations,
+        private readonly OwnerOrganizationResolver $centralOrganizations,
         private readonly IntentClassifierInterface $classifier,
         private readonly AgentSelector $agentSelector,
         private readonly ActiveBookingsFinderInterface $activeBookings,
@@ -69,16 +88,49 @@ class InboundMessageRouter
             return;
         }
 
+        if ($channel->isCentral() && $channel->organizations()->exists()) {
+            Log::error('InboundMessageRouter: el Channel CENTRAL está vinculado a una Organization — inconsistencia, mensaje rechazado', [
+                'channel_id' => $channel->id,
+                'phone_number_id' => $message->phoneNumberId,
+            ]);
+            InboundMessageRejected::dispatch($message, 'central_linked');
+
+            return;
+        }
+
         $session = $this->sessions->findOrCreateFor($channel, $message->fromPhone);
 
-        $resolution = $this->organizations->resolve($channel, $session);
+        $resolution = $channel->isCentral()
+            ? $this->centralOrganizations->resolve($channel, $session)
+            : $this->businessOrganizations->resolve($channel, $session);
 
-        $organization = $resolution->status === OrganizationResolutionStatus::Resolved
-            ? $resolution->organization
-            : null;
+        if ($resolution->status === OrganizationResolutionStatus::Inconsistent) {
+            Log::error('InboundMessageRouter: resolución de Organization inconsistente — mensaje rechazado', [
+                'channel_id' => $channel->id,
+                'role' => $channel->role->value,
+                'reason' => $resolution->reason,
+            ]);
+            InboundMessageRejected::dispatch($message, $resolution->reason);
+
+            return;
+        }
+
+        if ($resolution->status === OrganizationResolutionStatus::Unregistered && $channel->isBusiness()) {
+            Log::warning('InboundMessageRouter: Channel BUSINESS sin Organization vinculada — mensaje rechazado', [
+                'channel_id' => $channel->id,
+                'phone_number_id' => $message->phoneNumberId,
+            ]);
+            InboundMessageRejected::dispatch($message, 'channel_unlinked');
+
+            return;
+        }
+
+        $organization = $resolution->organization;
 
         if ($organization !== null) {
             $this->sessions->attachOrganization($session, $organization);
+        } else {
+            $this->sessions->detachOrganization($session);
         }
 
         // Capturado ANTES de clasificar: si ya había un Intent activo, este
@@ -111,9 +163,11 @@ class InboundMessageRouter
             $intent = Intent::RegistroNegocioBloqueado;
         }
 
+        $intent = $this->agentSelector->effectiveIntent($channel->role, $intent, $organization);
+
         $this->sessions->recordIntent($session, $intent);
 
-        $invoker = $this->agentSelector->selectFor($intent, $organization);
+        $invoker = $this->agentSelector->selectFor($channel->role, $intent, $organization);
 
         if ($invoker === null) {
             InboundMessageRejected::dispatch($message, 'agent_not_available');

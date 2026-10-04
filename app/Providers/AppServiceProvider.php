@@ -7,9 +7,10 @@ use App\Application\Booking\Listeners\RecordAttendanceDeclineOnBookingCancelled;
 use App\Application\Booking\Listeners\SendBookingCancellationNotification;
 use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
 use App\Application\Booking\Listeners\SendBookingRescheduleNotification;
-use App\Application\Booking\Listeners\SendProfessionalBookingCancellationNotification;
-use App\Application\Booking\Listeners\SendProfessionalBookingConfirmationNotification;
-use App\Application\Booking\Listeners\SendProfessionalBookingRescheduleNotification;
+use App\Application\Booking\Listeners\SendOwnerBookingCancellationNotification;
+use App\Application\Booking\Listeners\SendOwnerBookingConfirmationNotification;
+use App\Application\Booking\Listeners\SendOwnerBookingRescheduleNotification;
+use App\Application\Channels\MetaGraphPhoneNumberVerifier;
 use App\Application\Channels\PhoneNumberIdChannelResolver;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\ChannelResolverInterface;
@@ -17,11 +18,14 @@ use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\IntentClassifierInterface;
+use App\Application\Contracts\MetaPhoneNumberVerifierInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Contracts\OrganizationResolverInterface;
+use App\Application\Contracts\OwnerNotifierInterface;
 use App\Application\Conversations\Agents\AdminCommandAgent;
 use App\Application\Conversations\Agents\AgendaProfesionalAgent;
 use App\Application\Conversations\Agents\BookingChoiceAgent;
+use App\Application\Conversations\Agents\CentralOutOfScopeAgent;
 use App\Application\Conversations\Agents\ConfirmacionAsistenciaAgent;
 use App\Application\Conversations\Agents\ConversationResetAgent;
 use App\Application\Conversations\Agents\GestionNegocioAgent;
@@ -47,6 +51,7 @@ use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\CacheConversationDraftRepository;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
 use App\Application\Notifications\MetaWhatsAppClient;
+use App\Application\Notifications\OwnerNotifier;
 use App\Application\Notifications\WhatsAppNotificationSender;
 use App\Application\Organizations\SingleOrganizationResolver;
 use App\Contracts\AiServiceInterface;
@@ -85,7 +90,11 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(BookingSchedulerInterface::class, BookingScheduler::class);
         $this->app->bind(ActiveBookingsFinderInterface::class, ActiveBookingsFinder::class);
         $this->app->bind(NotificationSenderInterface::class, WhatsAppNotificationSender::class);
+        // B6: avisos al owner (Organization.owner_phone) por el CENTRAL.
+        $this->app->bind(OwnerNotifierInterface::class, OwnerNotifier::class);
         $this->app->bind(ChannelClientInterface::class, MetaWhatsAppClient::class);
+        // B9: verificación del WhatsApp propio de un negocio contra la Graph API.
+        $this->app->bind(MetaPhoneNumberVerifierInterface::class, MetaGraphPhoneNumberVerifier::class);
         $this->app->bind(EntitlementCheckerInterface::class, UnlimitedEntitlementChecker::class);
 
         $this->app->bind(ChannelResolverInterface::class, PhoneNumberIdChannelResolver::class);
@@ -149,25 +158,35 @@ class AppServiceProvider extends ServiceProvider
             ]);
         });
 
-        // Los agentes de negocio (Registro/Reservas, Hito 5/6) se agregan acá
-        // como una línea más del array — cero cambios en AgentSelector ni en
-        // el Router.
+        // B4: un mapa por rol del Channel — cada mapa es la allowlist de ese
+        // rol. Un Intent que no figura en el mapa del rol se atiende como
+        // FueraDeAlcance de ese rol (AgentSelector::effectiveIntent()).
+        // Un agente nuevo se agrega como una línea más en el mapa que
+        // corresponda — cero cambios en AgentSelector ni en el Router.
         $this->app->bind(AgentSelector::class, function () {
-            return new AgentSelector([
-                Intent::FueraDeAlcance->value => $this->app->make(OutOfScopeAgent::class),
-                Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
-                Intent::RegistroNegocioBloqueado->value => $this->app->make(RegistroNegocioBloqueadoAgent::class),
-                Intent::RegistroNegocioExpirado->value => $this->app->make(RegistroNegocioExpiradoAgent::class),
-                Intent::Reserva->value => $this->app->make(ReservaAgent::class),
-                Intent::GestionReserva->value => $this->app->make(GestionReservaAgent::class),
-                Intent::ReservaOGestion->value => $this->app->make(BookingChoiceAgent::class),
-                Intent::Reset->value => $this->app->make(ConversationResetAgent::class),
-                Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
-                Intent::GestionNegocio->value => $this->app->make(GestionNegocioAgent::class),
-                Intent::InfoNegocio->value => $this->app->make(InfoNegocioAgent::class),
-                Intent::ConfirmacionAsistencia->value => $this->app->make(ConfirmacionAsistenciaAgent::class),
-                Intent::AgendaProfesional->value => $this->app->make(AgendaProfesionalAgent::class),
-            ]);
+            $reset = $this->app->make(ConversationResetAgent::class);
+
+            return new AgentSelector(
+                centralAgents: [
+                    Intent::FueraDeAlcance->value => $this->app->make(CentralOutOfScopeAgent::class),
+                    Intent::RegistroNegocio->value => $this->app->make(RegistroNegocioAgent::class),
+                    Intent::RegistroNegocioBloqueado->value => $this->app->make(RegistroNegocioBloqueadoAgent::class),
+                    Intent::RegistroNegocioExpirado->value => $this->app->make(RegistroNegocioExpiradoAgent::class),
+                    Intent::GestionNegocio->value => $this->app->make(GestionNegocioAgent::class),
+                    Intent::AdminCommand->value => $this->app->make(AdminCommandAgent::class),
+                    Intent::AgendaProfesional->value => $this->app->make(AgendaProfesionalAgent::class),
+                    Intent::Reset->value => $reset,
+                ],
+                businessAgents: [
+                    Intent::FueraDeAlcance->value => $this->app->make(OutOfScopeAgent::class),
+                    Intent::Reserva->value => $this->app->make(ReservaAgent::class),
+                    Intent::GestionReserva->value => $this->app->make(GestionReservaAgent::class),
+                    Intent::ReservaOGestion->value => $this->app->make(BookingChoiceAgent::class),
+                    Intent::InfoNegocio->value => $this->app->make(InfoNegocioAgent::class),
+                    Intent::ConfirmacionAsistencia->value => $this->app->make(ConfirmacionAsistenciaAgent::class),
+                    Intent::Reset->value => $reset,
+                ],
+            );
         });
     }
 
@@ -204,13 +223,14 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(BookingCancelled::class, SendBookingCancellationNotification::class);
         Event::listen(BookingRescheduled::class, SendBookingRescheduleNotification::class);
 
-        // Fase 2B: notificación al profesional (Resource.contact_phone),
-        // agregada como un segundo listener por evento — los 3 de arriba
-        // (cliente) quedan intactos, sin ninguna dependencia entre ambos
-        // pares.
-        Event::listen(BookingConfirmed::class, SendProfessionalBookingConfirmationNotification::class);
-        Event::listen(BookingCancelled::class, SendProfessionalBookingCancellationNotification::class);
-        Event::listen(BookingRescheduled::class, SendProfessionalBookingRescheduleNotification::class);
+        // Aviso al negocio, un segundo listener por evento — los 3 de arriba
+        // (cliente, por el BUSINESS) quedan intactos, sin ninguna
+        // dependencia entre ambos pares. B6: el destinatario es el owner
+        // (Organization.owner_phone) por el CENTRAL; antes (Fase 2B) era el
+        // profesional por el teléfono propio del Resource.
+        Event::listen(BookingConfirmed::class, SendOwnerBookingConfirmationNotification::class);
+        Event::listen(BookingCancelled::class, SendOwnerBookingCancellationNotification::class);
+        Event::listen(BookingRescheduled::class, SendOwnerBookingRescheduleNotification::class);
 
         // Fase 3: confirmación de asistencia — reaccionan solo cuando la
         // cancelación/reprogramación está correlacionada con un "No"

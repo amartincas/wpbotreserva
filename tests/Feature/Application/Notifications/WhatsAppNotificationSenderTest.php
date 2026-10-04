@@ -1,15 +1,25 @@
 <?php
 
+use App\Application\Booking\Listeners\SendBookingConfirmationNotification;
 use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Exceptions\NotificationDeliveryException;
 use App\Application\Notifications\MetaWhatsAppClient;
 use App\Application\Notifications\WhatsAppNotificationSender;
+use App\Domain\Booking\Booking;
+use App\Domain\Booking\Events\BookingConfirmed;
+use App\Domain\CRM\Customer;
+use App\Domain\Scheduling\Service;
 use App\Domain\Tenancy\Channel;
+use App\Domain\Tenancy\Location;
 use App\Domain\Tenancy\Organization;
+use App\Enums\BookingStatus;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 function organizationWithChannel(ChannelStatus $status = ChannelStatus::ACTIVE, ?array $credentials = ['access_token' => 'fake-token']): array
 {
@@ -161,4 +171,68 @@ test('propaga la excepción del cliente cuando el proveedor falla', function () 
 
     expect(fn () => (new WhatsAppNotificationSender(new MetaWhatsAppClient))->send($org, '+573001234567', 'Hola'))
         ->toThrow(NotificationDeliveryException::class);
+});
+
+function senderFixtureCentral(): Channel
+{
+    return Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'role' => ChannelRole::CENTRAL,
+        'phone_number_id' => 'wamid-sender-central',
+        'status' => ChannelStatus::ACTIVE,
+        'credentials' => ['access_token' => 'central-token'],
+    ]);
+}
+
+test('B6: Organization sin BUSINESS — aunque haya un CENTRAL activo, nunca lo usa: loguea el motivo y lanza', function () {
+    Log::spy();
+    senderFixtureCentral();
+    $org = Organization::create(['name' => 'Recién registrada', 'owner_phone' => '+573009999999']);
+    $calls = [];
+    $sender = new WhatsAppNotificationSender(fakeChannelClient($calls));
+
+    expect(fn () => $sender->send($org, '+573001234567', 'Tu reserva quedó confirmada'))
+        ->toThrow(NotificationDeliveryException::class, 'BUSINESS');
+    expect(fn () => $sender->sendTemplate($org, '+573001234567', 'confirmacion_asistencia_reserva', 'es', []))
+        ->toThrow(NotificationDeliveryException::class);
+
+    expect($calls)->toBe([]);
+    Log::shouldHaveReceived('warning')->twice()->withArgs(fn ($message, $context) => $context['organization_id'] === $org->id);
+});
+
+test('B6: un CENTRAL vinculado por SQL a la Organization (estado corrupto) nunca se usa para hablarle al cliente', function () {
+    $central = senderFixtureCentral();
+    $org = Organization::create(['name' => 'Barbería Don Carlos']);
+    DB::table('channel_organization')->insert([
+        'channel_id' => $central->id, 'organization_id' => $org->id, 'is_primary' => true,
+        'created_at' => now(), 'updated_at' => now(),
+    ]);
+    $calls = [];
+
+    expect(fn () => (new WhatsAppNotificationSender(fakeChannelClient($calls)))->send($org, '+573001234567', 'hola'))
+        ->toThrow(NotificationDeliveryException::class);
+    expect($calls)->toBe([]);
+});
+
+test('B6: la confirmación de reserva al cliente sale por el BUSINESS de la Organization, nunca por el CENTRAL', function () {
+    $central = senderFixtureCentral();
+    [$org, $business] = organizationWithChannel();
+    $location = Location::create(['organization_id' => $org->id, 'name' => 'Sede']);
+    $service = Service::create(['organization_id' => $org->id, 'name' => 'Corte', 'duration_minutes' => 30]);
+    $customer = Customer::create(['organization_id' => $org->id, 'phone' => '+573001234567', 'name' => 'Ana']);
+    $booking = Booking::create([
+        'organization_id' => $org->id, 'location_id' => $location->id, 'service_id' => $service->id,
+        'customer_id' => $customer->id, 'starts_at' => '2026-10-05 20:00', 'ends_at' => '2026-10-05 20:30',
+        'duration_minutes' => 30, 'status' => BookingStatus::CONFIRMED,
+    ]);
+    $calls = [];
+
+    (new SendBookingConfirmationNotification(new WhatsAppNotificationSender(fakeChannelClient($calls))))
+        ->handle(new BookingConfirmed($booking));
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['channel']->is($business))->toBeTrue();
+    expect($calls[0]['channel']->is($central))->toBeFalse();
+    expect($calls[0]['to'])->toBe('+573001234567');
 });

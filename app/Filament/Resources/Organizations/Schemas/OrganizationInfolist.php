@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Organizations\Schemas;
 
+use App\Domain\Tenancy\Channel;
 use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -68,12 +69,27 @@ class OrganizationInfolist
                             ->hiddenLabel()
                             ->schema([
                                 TextEntry::make('phone_number')->label('Número'),
+                                TextEntry::make('role')->label('Rol')->badge(),
                                 TextEntry::make('provider')->label('Proveedor')->badge(),
                                 TextEntry::make('status')->label('Estado')->badge(),
                             ])
-                            ->columns(3),
+                            ->columns(4),
                     ])
                     ->visible(fn ($record) => $record->channels()->exists()),
+                // B9: la conexión todavía no está vinculada (eso pasa al
+                // verificarla), así que no aparece en "Canales". Nunca se
+                // muestran credenciales.
+                Section::make('WhatsApp del negocio — pendiente de verificación')
+                    ->components([
+                        TextEntry::make('pending_business_phone_number')
+                            ->label('Número')
+                            ->state(fn ($record) => Channel::pendingBusinessFor($record)->value('phone_number')),
+                        TextEntry::make('pending_business_last_error')
+                            ->label('Último intento de verificación')
+                            ->state(fn ($record) => Channel::pendingBusinessFor($record)->first()?->metadata['last_verification_error'] ?? 'Todavía no se verificó.'),
+                    ])
+                    ->columns(2)
+                    ->visible(fn ($record) => Channel::pendingBusinessFor($record)->exists()),
             ]);
     }
 }

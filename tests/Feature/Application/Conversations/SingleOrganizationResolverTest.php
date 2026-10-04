@@ -43,19 +43,15 @@ test('devuelve Unregistered cuando el Channel no tiene ninguna organización vin
 });
 
 /**
- * Fase 6: un Channel ya no puede tener más de una Organization vinculada
- * (UNIQUE(channel_id) en channel_organization) — el propio fixture de este
- * escenario (2 Organizations para el mismo Channel) ya no se puede
- * construir con un attach() real, así que deja de tener sentido probarlo
- * acá. "Channel → 0 o 1 Organization" es la regla de negocio definitiva,
- * no una transición.
+ * B4: el vínculo del Channel es la única fuente de verdad para un BUSINESS
+ * — ya no se reutiliza session->organization_id como atajo. Si el número
+ * se desvincula de su negocio, una sesión memoizada no puede seguir
+ * resolviendo a esa Organization. (2+ vínculos no se puede construir: lo
+ * impide UNIQUE(channel_id); el fail-closed se prueba en el Router.)
  */
-test('reutiliza organization_id ya resuelto en la sesión sin volver a consultar el pivot', function () {
+test('ya no reutiliza organization_id de la sesión: un Channel desvinculado es Unregistered aunque la sesión tenga Organization', function () {
     $channel = orgResolverFixtureChannel();
     $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    // A propósito NO se vincula el channel a la organización — si el
-    // resolver consultara el pivot, devolvería NotFound. Que devuelva
-    // Resolved prueba que usó el shortcut de session->organization_id.
     $session = ConversationSession::create([
         'channel_id' => $channel->id,
         'customer_phone' => '+573001234567',
@@ -64,6 +60,6 @@ test('reutiliza organization_id ya resuelto en la sesión sin volver a consultar
 
     $resolution = (new SingleOrganizationResolver)->resolve($channel, $session);
 
-    expect($resolution->status)->toBe(OrganizationResolutionStatus::Resolved);
-    expect($resolution->organization->is($org))->toBeTrue();
+    expect($resolution->status)->toBe(OrganizationResolutionStatus::Unregistered);
+    expect($resolution->organization)->toBeNull();
 });

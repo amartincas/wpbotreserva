@@ -38,7 +38,6 @@ class AddResourceCommand
                 'location_id' => $location?->id,
                 'resource_type' => ResourceType::HUMAN,
                 'display_name' => $data->name,
-                'contact_phone' => $data->contactPhone,
             ]);
 
             foreach ($data->weeklySchedule as $slot) {

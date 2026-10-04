@@ -2,8 +2,6 @@
 
 namespace App\Application\Tenancy;
 
-use App\Domain\Tenancy\Channel;
-
 /**
  * Incremento 4: generalizado a N servicios / N recursos (antes, uno de
  * cada, Parte XII/XVI). Cada recurso puede tener su propio horario. Qué
@@ -11,6 +9,10 @@ use App\Domain\Tenancy\Channel;
  * (ServiceRegistrationData::$resourceKeys, elegido en la conversación vía
  * ServiceResourceSelectionFlow) — ya no se asume "todo recurso presta todo
  * servicio".
+ *
+ * B5: sin Channel — registrar una Organization ya no implica vincular el
+ * número por el que se hizo el onboarding (el CENTRAL, que no pertenece a
+ * ninguna). ownerPhone es lo que identifica al dueño.
  */
 final class RegisterOrganizationData
 {
@@ -21,7 +23,6 @@ final class RegisterOrganizationData
     public function __construct(
         public readonly string $organizationName,
         public readonly string $ownerPhone,
-        public readonly Channel $channel,
         public readonly ?string $city,
         public readonly ?string $address,
         public readonly array $services,

@@ -3,8 +3,8 @@
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
-use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -16,39 +16,41 @@ use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\BookingStatus;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use Carbon\CarbonImmutable;
 
 beforeEach(function () {
-    // Sin esto, el comando intenta pegarle a la API real de Meta (sin
-    // credenciales en test) — el try/catch de ReviewPastBookings absorbería
-    // la falla en silencio en vez de dejar ver si el resto del test se
-    // comporta bien. $this->sent queda disponible para los tests que
-    // necesitan inspeccionar los mensajes enviados.
+    // B6: los avisos al dueño salen por el CENTRAL, vía OwnerNotifier real —
+    // se simula solo el cliente de Meta (sin credenciales en test), que
+    // además registra por qué Channel salió cada mensaje. $this->sent queda
+    // disponible para los tests que necesitan inspeccionar lo enviado.
     $this->sent = [];
-    app()->instance(NotificationSenderInterface::class, reviewPastFakeNotificationSender($this->sent));
+    $this->central = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'role' => ChannelRole::CENTRAL,
+        'phone_number_id' => 'wamid-review-past-central',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    app()->instance(ChannelClientInterface::class, reviewPastFakeChannelClient($this->sent));
 });
 
-function reviewPastFakeNotificationSender(array &$sent): NotificationSenderInterface
+function reviewPastFakeChannelClient(array &$sent): ChannelClientInterface
 {
-    return new class($sent) implements NotificationSenderInterface
+    return new class($sent) implements ChannelClientInterface
     {
         public function __construct(private array &$sent) {}
 
-        public function send(Organization $organization, string $toPhoneE164, string $message): void
+        public function sendTextMessage(Channel $channel, string $to, string $message): void {}
+
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void
         {
-            // No-op: la confirmación de reserva al crear la fixture pasa por
-            // acá (SendBookingConfirmationNotification), no por el código
-            // bajo prueba — solo sendTemplate() es lo que este test observa.
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'templateName' => $templateName, 'language' => $language, 'bodyParameters' => $bodyParameters];
         }
 
-        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void
-        {
-            $this->sent[] = compact('organization', 'toPhoneE164', 'templateName', 'language', 'bodyParameters');
-        }
-
-        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void {}
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void {}
     };
 }
 
@@ -65,7 +67,6 @@ function reviewPastFixtureOrganization(string $phoneNumberId = 'wamid-review-pas
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: $ownerPhone,
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
@@ -74,6 +75,9 @@ function reviewPastFixtureOrganization(string $phoneNumberId = 'wamid-review-pas
             range(0, 6)
         ))],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -198,4 +202,36 @@ test('el mensaje de recordatorio y el de auto-completado se mandan al owner_phon
     }
     expect($this->sent[0]['templateName'])->toBe('aviso_turno_vencido');
     expect($this->sent[1]['templateName'])->toBe('turno_completado_automatico');
+});
+
+test('B6: el recordatorio y el aviso de auto-completado salen por el CENTRAL, nunca por el BUSINESS de la Organization', function () {
+    $organization = reviewPastFixtureOrganization();
+    reviewPastFixtureBooking($organization, now()->subDays(2)->setTime(9, 0));
+    reviewPastFixtureBooking($organization, now()->subDays(8)->setTime(10, 0));
+
+    $this->artisan('bookings:review-past')->assertSuccessful();
+
+    expect($this->sent)->toHaveCount(2);
+    foreach ($this->sent as $message) {
+        expect($message['channel']->is($this->central))->toBeTrue();
+        expect($message['channel']->is($organization->channels()->first()))->toBeFalse();
+    }
+});
+
+test('B6: sin CENTRAL activo no se envía ni se marca el recordatorio — se reintenta en la próxima corrida, sin duplicar', function () {
+    $organization = reviewPastFixtureOrganization();
+    $booking = reviewPastFixtureBooking($organization, now()->subDays(2)->setTime(9, 0));
+    $this->central->update(['status' => ChannelStatus::DISCONNECTED]);
+
+    $this->artisan('bookings:review-past')->assertSuccessful();
+
+    expect($this->sent)->toBe([]);
+    expect($booking->fresh()->reminder_sent_at)->toBeNull();
+
+    $this->central->update(['status' => ChannelStatus::ACTIVE]);
+    $this->artisan('bookings:review-past')->assertSuccessful();
+    $this->artisan('bookings:review-past')->assertSuccessful();
+
+    expect($this->sent)->toHaveCount(1);
+    expect($booking->fresh()->reminder_sent_at)->not->toBeNull();
 });

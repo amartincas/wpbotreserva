@@ -2,8 +2,8 @@
 
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Entitlements\UnlimitedEntitlementChecker;
-use App\Application\Exceptions\ChannelAlreadyRegisteredException;
 use App\Application\Exceptions\EntitlementDeniedException;
+use App\Application\Exceptions\OwnerAlreadyRegisteredException;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -12,27 +12,33 @@ use App\Application\Tenancy\WeeklyScheduleSlot;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use App\Enums\ResourceType;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 
-function registerOrgFixtureChannel(): Channel
+/**
+ * El número CENTRAL por el que en producción llega el onboarding — B5: el
+ * registro nunca lo toca, así que solo se crea donde el test lo verifica.
+ */
+function registerOrgFixtureCentral(): Channel
 {
     return Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
         'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-registro',
+        'role' => ChannelRole::CENTRAL,
+        'phone_number_id' => 'wamid-registro-central',
         'status' => ChannelStatus::ACTIVE,
     ]);
 }
 
-function registerOrgData(Channel $channel, array $overrides = []): RegisterOrganizationData
+function registerOrgData(array $overrides = []): RegisterOrganizationData
 {
     return new RegisterOrganizationData(
         organizationName: $overrides['organizationName'] ?? 'Barbería Don Carlos',
         ownerPhone: $overrides['ownerPhone'] ?? '+573001234567',
-        channel: $channel,
         city: $overrides['city'] ?? 'Bogotá',
         address: $overrides['address'] ?? 'Cra 7 # 45-12',
         services: $overrides['services'] ?? [
@@ -47,16 +53,21 @@ function registerOrgData(Channel $channel, array $overrides = []): RegisterOrgan
     );
 }
 
-test('registra una organización de un servicio y un recurso: location, resource, service, requisito, horario y channel vinculado', function () {
-    $channel = registerOrgFixtureChannel();
+test('registra una organización de un servicio y un recurso: location, resource, service, requisito y horario — sin vincular ningún Channel', function () {
+    $central = registerOrgFixtureCentral();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
-    $result = $command->handle(registerOrgData($channel));
+    $result = $command->handle(registerOrgData());
 
     $org = Organization::findOrFail($result->organizationId);
     expect($org->name)->toBe('Barbería Don Carlos');
     expect($org->owner_phone)->toBe('+573001234567');
-    expect($org->channels)->toHaveCount(1)->and($org->channels->first()->is($channel))->toBeTrue();
+
+    // B5: el registro ocurre en el CENTRAL, que nunca se vincula; el
+    // BUSINESS del negocio se conecta después (B9).
+    expect($org->channels)->toHaveCount(0);
+    expect($central->fresh()->organizations)->toHaveCount(0);
+    expect(DB::table('channel_organization')->count())->toBe(0);
 
     expect($org->locations)->toHaveCount(1);
     $location = $org->locations->first();
@@ -79,11 +90,10 @@ test('registra una organización de un servicio y un recurso: location, resource
 });
 
 test('Fase 1: cada servicio queda asociado solo a los recursos elegidos para él — un recurso puede prestar varios servicios, pero nunca se genera el cruce cartesiano completo', function () {
-    $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
     // Índices de $resources: 0=Carlos, 1=Ana.
-    $result = $command->handle(registerOrgData($channel, [
+    $result = $command->handle(registerOrgData([
         'services' => [
             new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0]), // solo Carlos
             new ServiceRegistrationData('Barba', 20, resourceKeys: [1]), // solo Ana
@@ -138,22 +148,19 @@ test('Fase 1: cada servicio queda asociado solo a los recursos elegidos para él
 });
 
 test('Fase 1: sin organizationDescription, la organización queda con NULL — nunca inventa un valor por default', function () {
-    $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
-    $result = $command->handle(registerOrgData($channel));
+    $result = $command->handle(registerOrgData());
 
     expect(Organization::findOrFail($result->organizationId)->description)->toBeNull();
 });
 
 test('Fase 1: con organizationDescription, la organización la persiste tal cual', function () {
-    $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: '+573001234567',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
@@ -166,10 +173,9 @@ test('Fase 1: con organizationDescription, la organización la persiste tal cual
 });
 
 test('Fase 1: un servicio sin descripción ni precio queda con ambos en NULL', function () {
-    $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
-    $result = $command->handle(registerOrgData($channel, [
+    $result = $command->handle(registerOrgData([
         'services' => [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
     ]));
 
@@ -179,10 +185,9 @@ test('Fase 1: un servicio sin descripción ni precio queda con ambos en NULL', f
 });
 
 test('Fase 1: un servicio con descripción y precio numérico persiste ambos', function () {
-    $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
-    $result = $command->handle(registerOrgData($channel, [
+    $result = $command->handle(registerOrgData([
         'services' => [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0], description: 'Incluye lavado.', price: 45000.0)],
     ]));
 
@@ -192,10 +197,9 @@ test('Fase 1: un servicio con descripción y precio numérico persiste ambos', f
 });
 
 test('Fase 1: un servicio con precio condicional (no numérico) persiste el texto en description y precio NULL', function () {
-    $channel = registerOrgFixtureChannel();
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
 
-    $result = $command->handle(registerOrgData($channel, [
+    $result = $command->handle(registerOrgData([
         'services' => [new ServiceRegistrationData('Consulta', 60, resourceKeys: [0], description: 'depende de la valoración', price: null)],
     ]));
 
@@ -205,7 +209,6 @@ test('Fase 1: un servicio con precio condicional (no numérico) persiste el text
 });
 
 test('consulta EntitlementChecker con la cantidad real de resources/services que va a crear', function () {
-    $channel = registerOrgFixtureChannel();
     $calls = [];
     $spy = new class($calls) implements EntitlementCheckerInterface
     {
@@ -224,7 +227,7 @@ test('consulta EntitlementChecker con la cantidad real de resources/services que
         }
     };
 
-    (new RegisterOrganizationCommand($spy))->handle(registerOrgData($channel, [
+    (new RegisterOrganizationCommand($spy))->handle(registerOrgData([
         'services' => [
             new ServiceRegistrationData('Corte de cabello', 30),
             new ServiceRegistrationData('Barba', 20),
@@ -243,7 +246,6 @@ test('consulta EntitlementChecker con la cantidad real de resources/services que
 });
 
 test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea nada (transacción revertida)', function () {
-    $channel = registerOrgFixtureChannel();
     $denyAll = new class implements EntitlementCheckerInterface
     {
         public function check($organization, string $entitlementKey, int $requestedQuantity = 1): bool
@@ -252,34 +254,81 @@ test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea 
         }
     };
 
-    expect(fn () => (new RegisterOrganizationCommand($denyAll))->handle(registerOrgData($channel)))
+    expect(fn () => (new RegisterOrganizationCommand($denyAll))->handle(registerOrgData()))
         ->toThrow(EntitlementDeniedException::class);
 
     expect(Organization::count())->toBe(0);
 });
 
+test('el registro no depende de channel_organization: funciona sin ningún Channel en la base', function () {
+    expect(Channel::count())->toBe(0);
+
+    $result = (new RegisterOrganizationCommand(new UnlimitedEntitlementChecker))->handle(registerOrgData());
+
+    expect(Organization::findOrFail($result->organizationId)->owner_phone)->toBe('+573001234567');
+});
+
 /**
- * Fase 6 — Cambio A.5: defensa transaccional (capa 2) contra doble
- * registro. El guard conversacional del Router (capa 1) es quien cubre el
- * caso común; esto prueba directamente que el propio Command, invocado dos
- * veces para el mismo Channel, nunca produce un segundo vínculo — con o sin
- * guard conversacional de por medio.
+ * B5 — capa 2 del doble registro: el Command, invocado dos veces para el
+ * mismo owner, nunca crea una segunda Organization. Lo detecta
+ * UNIQUE(owner_phone) — el guard conversacional del Router (capa 1) cubre
+ * el caso común antes de llegar acá.
  */
-test('un segundo registro sobre un Channel ya vinculado lanza ChannelAlreadyRegisteredException y revierte toda la transacción', function () {
-    $channel = registerOrgFixtureChannel();
+test('un segundo registro del mismo owner lanza OwnerAlreadyRegisteredException y revierte toda la transacción', function () {
     $command = new RegisterOrganizationCommand(new UnlimitedEntitlementChecker);
+    $first = $command->handle(registerOrgData());
+    $before = registerOrgRowCounts();
 
-    $first = $command->handle(registerOrgData($channel));
-
-    expect(fn () => $command->handle(registerOrgData($channel, ['organizationName' => 'Otro Negocio'])))
-        ->toThrow(ChannelAlreadyRegisteredException::class);
+    expect(fn () => $command->handle(registerOrgData(['organizationName' => 'Otro Negocio'])))
+        ->toThrow(OwnerAlreadyRegisteredException::class);
 
     // La primera Organization permanece intacta — nada del segundo intento
-    // (ni la Organization "Otro Negocio" en sí, ni su Location/Resource/Service)
-    // llegó a persistir.
-    expect(Organization::count())->toBe(1);
-    expect(Organization::first()->id)->toBe($first->organizationId);
-    expect(Organization::where('name', 'Otro Negocio')->exists())->toBeFalse();
-
-    expect(DB::table('channel_organization')->where('channel_id', $channel->id)->count())->toBe(1);
+    // (ni "Otro Negocio" en sí, ni su Location/Resource/Service) persistió.
+    expect(registerOrgRowCounts())->toBe($before);
+    expect(Organization::sole()->id)->toBe($first->organizationId);
 });
+
+test('carrera real: si otra confirmación del mismo owner ya insertó su Organization, la detecta el UNIQUE de la base (no un chequeo previo) y no deja nada parcial', function () {
+    // "Otro proceso" ganó la carrera: su Organization ya está en la base
+    // cuando este registro — que ya pasó el guard del Router — confirma.
+    DB::table('organizations')->insert([
+        'name' => 'Ganó la carrera', 'owner_phone' => '+573001234567',
+        'created_at' => now(), 'updated_at' => now(),
+    ]);
+    $before = registerOrgRowCounts();
+
+    try {
+        (new RegisterOrganizationCommand(new UnlimitedEntitlementChecker))->handle(registerOrgData());
+        $this->fail('Se esperaba OwnerAlreadyRegisteredException.');
+    } catch (OwnerAlreadyRegisteredException $e) {
+        expect($e->getPrevious())->toBeInstanceOf(UniqueConstraintViolationException::class);
+    }
+
+    expect(registerOrgRowCounts())->toBe($before);
+    expect(Organization::sole()->name)->toBe('Ganó la carrera');
+});
+
+test('un error a mitad del registro (después de crear Organization, Location y Resources) revierte todo', function () {
+    $denyServices = new class implements EntitlementCheckerInterface
+    {
+        public function check($organization, string $entitlementKey, int $requestedQuantity = 1): bool
+        {
+            return $entitlementKey !== 'scheduling.max_services';
+        }
+    };
+
+    expect(fn () => (new RegisterOrganizationCommand($denyServices))->handle(registerOrgData()))
+        ->toThrow(EntitlementDeniedException::class);
+
+    expect(array_sum(registerOrgRowCounts()))->toBe(0);
+});
+
+/**
+ * @return array<string, int>
+ */
+function registerOrgRowCounts(): array
+{
+    return collect(['organizations', 'locations', 'resources', 'resource_schedules', 'services', 'service_resource_requirements', 'channel_organization'])
+        ->mapWithKeys(fn (string $table) => [$table => DB::table($table)->count()])
+        ->all();
+}

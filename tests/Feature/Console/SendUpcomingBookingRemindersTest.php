@@ -3,9 +3,11 @@
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Exceptions\NotificationDeliveryException;
+use App\Application\Notifications\WhatsAppNotificationSender;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -17,6 +19,7 @@ use App\Domain\Booking\PendingAttendanceConfirmation;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use Carbon\CarbonImmutable;
@@ -54,7 +57,6 @@ function upcomingReminderFixtureOrganization(string $phoneNumberId = 'wamid-upco
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'AMC Studios',
         ownerPhone: '+573009999999',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
@@ -63,6 +65,9 @@ function upcomingReminderFixtureOrganization(string $phoneNumberId = 'wamid-upco
             range(0, 6)
         ))],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -269,4 +274,40 @@ test('Fase 3: un fallo de persistencia en una reserva no interrumpe el procesami
     // La siguiente del lote se procesó normalmente pese al fallo anterior.
     expect($okBooking->fresh()->upcoming_reminder_sent_at)->not->toBeNull();
     expect(PendingAttendanceConfirmation::where('booking_id', $okBooking->id)->exists())->toBeTrue();
+});
+
+test('B6: con el emisor real, el recordatorio al cliente sale por el BUSINESS de la Organization, nunca por el CENTRAL', function () {
+    $central = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'role' => ChannelRole::CENTRAL,
+        'phone_number_id' => 'wamid-upcoming-central',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $organization = upcomingReminderFixtureOrganization();
+    upcomingReminderFixtureBooking($organization, CarbonImmutable::now()->addHours(23)->addMinutes(30));
+
+    $calls = [];
+    $client = new class($calls) implements ChannelClientInterface
+    {
+        public function __construct(private array &$calls) {}
+
+        public function sendTextMessage(Channel $channel, string $to, string $message): void {}
+
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void
+        {
+            $this->calls[] = compact('channel', 'to', 'templateName');
+        }
+
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void {}
+    };
+    app()->instance(NotificationSenderInterface::class, new WhatsAppNotificationSender($client));
+
+    $this->artisan('bookings:send-upcoming-reminders')->assertSuccessful();
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['channel']->is($organization->channels()->first()))->toBeTrue();
+    expect($calls[0]['channel']->is($central))->toBeFalse();
+    expect($calls[0]['to'])->toBe('+573001234567');
+    expect($calls[0]['templateName'])->toBe('confirmacion_asistencia_reserva');
 });

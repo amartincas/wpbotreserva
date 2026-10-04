@@ -5,10 +5,9 @@ namespace App\Application\Conversations\Agents;
 use App\Application\Contracts\AgentInterface;
 use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\ConversationSessionRepositoryInterface;
-use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
+use App\Application\Conversations\ConversationReplier;
 use App\Application\Conversations\Flows\AiFieldExtractor;
-use App\Application\Conversations\Flows\ContactPhoneFieldExtractor;
 use App\Application\Conversations\Flows\DurationFieldExtractor;
 use App\Application\Conversations\Flows\FreeTextFieldExtractor;
 use App\Application\Conversations\Flows\PersistedResourceCatalog;
@@ -90,8 +89,6 @@ class GestionNegocioAgent implements AgentInterface
 
     private readonly AiFieldExtractor $resourceNameExtractor;
 
-    private readonly ContactPhoneFieldExtractor $contactPhoneExtractor;
-
     private readonly WeeklyScheduleFieldExtractor $weeklyScheduleExtractor;
 
     private readonly FreeTextFieldExtractor $freeTextExtractor;
@@ -101,7 +98,7 @@ class GestionNegocioAgent implements AgentInterface
     public function __construct(
         private readonly ConversationDraftRepositoryInterface $drafts,
         private readonly ConversationSessionRepositoryInterface $sessions,
-        private readonly NotificationSenderInterface $notifications,
+        private readonly ConversationReplier $replier,
         private readonly AddServiceCommand $addService,
         private readonly AddResourceCommand $addResource,
         private readonly ReplaceResourceScheduleCommand $replaceSchedule,
@@ -113,7 +110,6 @@ class GestionNegocioAgent implements AgentInterface
             new AiFieldExtractor($ai, 'duración en minutos', 'La duración del servicio, en minutos, como número entero.', $botMessages)
         );
         $this->resourceNameExtractor = new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.', $botMessages);
-        $this->contactPhoneExtractor = new ContactPhoneFieldExtractor($botMessages);
         $this->weeklyScheduleExtractor = new WeeklyScheduleFieldExtractor($ai, $botMessages);
         $this->freeTextExtractor = new FreeTextFieldExtractor;
         $this->servicePriceExtractor = new ServicePriceFieldExtractor;
@@ -131,7 +127,6 @@ class GestionNegocioAgent implements AgentInterface
         return new ServiceResourceSelectionFlow(
             new PersistedResourceCatalog($organization, $this->addResource),
             $this->resourceNameExtractor,
-            $this->contactPhoneExtractor,
             $this->weeklyScheduleExtractor,
             self::YES_WORDS,
             self::NO_WORDS,
@@ -155,8 +150,8 @@ class GestionNegocioAgent implements AgentInterface
             $draft = $resourceFlow->handle(
                 $message,
                 $draft,
-                fn (string $text) => $this->reply($organization, $message->fromPhone, $text),
-                fn (string $text) => $this->replyYesNo($organization, $message->fromPhone, $text),
+                fn (string $text) => $this->reply($session, $message->fromPhone, $text),
+                fn (string $text) => $this->replyYesNo($session, $message->fromPhone, $text),
                 fn (array $draft) => $this->beginServiceConfirmationDraft($session, $organization, $message->fromPhone, $draft),
             );
             $this->drafts->put($session, $draft);
@@ -217,7 +212,7 @@ class GestionNegocioAgent implements AgentInterface
         // hay algún flag _awaiting* seteado que lo intercepta antes), así
         // que el saludo no necesita un marcador propio como _started.
         // Burbuja aparte, no concatenada a la primera pregunta/botones.
-        $this->reply($organization, $message->fromPhone, $this->botMessages->render('saludo.primer_mensaje') ?? '¡Hola! Soy el asistente de WpbotReserva.');
+        $this->reply($session, $message->fromPhone, $this->botMessages->render('saludo.primer_mensaje') ?? '¡Hola! Soy el asistente de WpbotReserva.');
 
         // Si ya es una frase específica, no hace falta preguntar de nuevo.
         $trigger = mb_strtolower(trim($message->text));
@@ -225,7 +220,7 @@ class GestionNegocioAgent implements AgentInterface
         if (in_array($trigger, self::ADD_SERVICE_TRIGGER_PHRASES, true)) {
             $draft['_awaitingServiceName'] = true;
             $this->drafts->put($session, $draft);
-            $this->reply($organization, $message->fromPhone, $this->botMessages->render('gestion.nombre_servicio_nuevo') ?? '¿Cuál es el nombre del servicio nuevo?');
+            $this->reply($session, $message->fromPhone, $this->botMessages->render('gestion.nombre_servicio_nuevo') ?? '¿Cuál es el nombre del servicio nuevo?');
 
             return;
         }
@@ -240,7 +235,7 @@ class GestionNegocioAgent implements AgentInterface
         // hace falta preguntar cuál de las dos acciones quiere.
         $draft['_awaitingAction'] = true;
         $this->drafts->put($session, $draft);
-        $this->notifications->sendButtons($organization, $message->fromPhone, $this->botMessages->render('gestion.que_hacer') ?? '¿Qué querés hacer?', self::ACTION_BUTTONS);
+        $this->replier->sendButtons($session, $message->fromPhone, $this->botMessages->render('gestion.que_hacer') ?? '¿Qué querés hacer?', self::ACTION_BUTTONS);
     }
 
     /**
@@ -254,7 +249,7 @@ class GestionNegocioAgent implements AgentInterface
             unset($draft['_awaitingAction']);
             $draft['_awaitingServiceName'] = true;
             $this->drafts->put($session, $draft);
-            $this->reply($organization, $message->fromPhone, $this->botMessages->render('gestion.nombre_servicio_nuevo') ?? '¿Cuál es el nombre del servicio nuevo?');
+            $this->reply($session, $message->fromPhone, $this->botMessages->render('gestion.nombre_servicio_nuevo') ?? '¿Cuál es el nombre del servicio nuevo?');
 
             return;
         }
@@ -266,7 +261,7 @@ class GestionNegocioAgent implements AgentInterface
             return;
         }
 
-        $this->notifications->sendButtons($organization, $message->fromPhone, $this->botMessages->render('gestion.que_hacer_reintento') ?? 'No entendí. ¿Qué querés hacer?', self::ACTION_BUTTONS);
+        $this->replier->sendButtons($session, $message->fromPhone, $this->botMessages->render('gestion.que_hacer_reintento') ?? 'No entendí. ¿Qué querés hacer?', self::ACTION_BUTTONS);
     }
 
     // --- Agregar servicio ---------------------------------------------
@@ -279,7 +274,7 @@ class GestionNegocioAgent implements AgentInterface
         $result = $this->serviceNameExtractor->extract($message->text, $draft);
 
         if (! $result->successful) {
-            $this->reply($organization, $message->fromPhone, $result->reason);
+            $this->reply($session, $message->fromPhone, $result->reason);
 
             return;
         }
@@ -288,7 +283,7 @@ class GestionNegocioAgent implements AgentInterface
         unset($draft['_awaitingServiceName']);
         $draft['_awaitingServiceDuration'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($organization, $message->fromPhone, $this->botMessages->render('servicio.duracion', ['servicio' => $result->value]) ?? "¿Cuánto dura {$result->value}, en minutos?");
+        $this->reply($session, $message->fromPhone, $this->botMessages->render('servicio.duracion', ['servicio' => $result->value]) ?? "¿Cuánto dura {$result->value}, en minutos?");
     }
 
     /**
@@ -299,7 +294,7 @@ class GestionNegocioAgent implements AgentInterface
         $result = $this->serviceDurationExtractor->extract($message->text, $draft);
 
         if (! $result->successful) {
-            $this->reply($organization, $message->fromPhone, $result->reason);
+            $this->reply($session, $message->fromPhone, $result->reason);
 
             return;
         }
@@ -308,7 +303,7 @@ class GestionNegocioAgent implements AgentInterface
         unset($draft['_awaitingServiceDuration']);
         $draft['_awaitingServiceDescription'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($organization, $message->fromPhone, $this->botMessages->render('servicio.descripcion', ['servicio' => $draft['_pendingServiceName']])
+        $this->reply($session, $message->fromPhone, $this->botMessages->render('servicio.descripcion', ['servicio' => $draft['_pendingServiceName']])
             ?? "Contame brevemente en qué consiste {$draft['_pendingServiceName']} (opcional, escribí \"no\" para omitir).");
     }
 
@@ -322,7 +317,7 @@ class GestionNegocioAgent implements AgentInterface
         unset($draft['_awaitingServiceDescription']);
         $draft['_awaitingServicePrice'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($organization, $message->fromPhone, $this->botMessages->render('servicio.precio', ['servicio' => $draft['_pendingServiceName']])
+        $this->reply($session, $message->fromPhone, $this->botMessages->render('servicio.precio', ['servicio' => $draft['_pendingServiceName']])
             ?? "¿Cuánto cuesta {$draft['_pendingServiceName']}? (opcional, escribí \"no\" para omitir).");
     }
 
@@ -357,7 +352,7 @@ class GestionNegocioAgent implements AgentInterface
         // servicio" (caso real, segunda ronda).
         $draft = $this->resourceFlow($organization)->begin(
             $draft,
-            fn (string $text) => $this->reply($organization, $message->fromPhone, $text),
+            fn (string $text) => $this->reply($session, $message->fromPhone, $text),
             fn (array $draft) => $this->beginServiceConfirmationDraft($session, $organization, $message->fromPhone, $draft),
         );
         $this->drafts->put($session, $draft);
@@ -373,7 +368,7 @@ class GestionNegocioAgent implements AgentInterface
     private function beginServiceConfirmationDraft(ConversationSession $session, Organization $organization, string $toPhone, array $draft): array
     {
         $draft['_awaitingServiceConfirmation'] = true;
-        $this->replyYesNo($organization, $toPhone, $this->serviceConfirmationText($draft));
+        $this->replyYesNo($session, $toPhone, $this->serviceConfirmationText($draft));
 
         return $draft;
     }
@@ -400,7 +395,7 @@ class GestionNegocioAgent implements AgentInterface
             $this->drafts->forget($session);
             $this->sessions->recordIntent($session, null);
             $this->reply(
-                $organization,
+                $session,
                 $message->fromPhone,
                 $this->botMessages->render('gestion.listo_servicio', ['servicio' => $draft['_pendingServiceName']])
                     ?? "¡Listo! Agregué *{$draft['_pendingServiceName']}* a tu negocio.",
@@ -412,12 +407,12 @@ class GestionNegocioAgent implements AgentInterface
         if (in_array($answer, self::NO_WORDS, true)) {
             $this->drafts->forget($session);
             $this->sessions->recordIntent($session, null);
-            $this->reply($organization, $message->fromPhone, $this->botMessages->render('gestion.no_agregue_nada') ?? 'Ok, no agregué nada.');
+            $this->reply($session, $message->fromPhone, $this->botMessages->render('gestion.no_agregue_nada') ?? 'Ok, no agregué nada.');
 
             return;
         }
 
-        $this->replyYesNo($organization, $message->fromPhone, $this->serviceConfirmationText($draft));
+        $this->replyYesNo($session, $message->fromPhone, $this->serviceConfirmationText($draft));
     }
 
     /**
@@ -463,7 +458,7 @@ class GestionNegocioAgent implements AgentInterface
             $draft['_awaitingResourceSelection'] = true;
             $draft['_resourceOptions'] = $resources->pluck('id')->all();
             $this->drafts->put($session, $draft);
-            $this->reply($organization, $toPhone, $this->formatResourceOptions($resources));
+            $this->reply($session, $toPhone, $this->formatResourceOptions($resources));
 
             return;
         }
@@ -472,7 +467,7 @@ class GestionNegocioAgent implements AgentInterface
         $draft['resourceId'] = $resource->id;
         $draft['_awaitingNewSchedule'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($organization, $toPhone, $this->newScheduleQuestion($resource));
+        $this->reply($session, $toPhone, $this->newScheduleQuestion($resource));
     }
 
     /**
@@ -483,7 +478,7 @@ class GestionNegocioAgent implements AgentInterface
         $options = $draft['_resourceOptions'];
 
         if (! preg_match('/\d+/', $message->text, $matches) || ! isset($options[((int) $matches[0]) - 1])) {
-            $this->reply($organization, $message->fromPhone, $this->botMessages->render('gestion.opcion_recurso_invalida') ?? 'No entendí la opción. Respondé con el número de la persona o recurso.');
+            $this->reply($session, $message->fromPhone, $this->botMessages->render('gestion.opcion_recurso_invalida') ?? 'No entendí la opción. Respondé con el número de la persona o recurso.');
 
             return;
         }
@@ -493,7 +488,7 @@ class GestionNegocioAgent implements AgentInterface
         unset($draft['_awaitingResourceSelection'], $draft['_resourceOptions']);
         $draft['_awaitingNewSchedule'] = true;
         $this->drafts->put($session, $draft);
-        $this->reply($organization, $message->fromPhone, $this->newScheduleQuestion($resource));
+        $this->reply($session, $message->fromPhone, $this->newScheduleQuestion($resource));
     }
 
     /**
@@ -504,7 +499,7 @@ class GestionNegocioAgent implements AgentInterface
         $result = $this->weeklyScheduleExtractor->extract($message->text, $draft);
 
         if (! $result->successful) {
-            $this->reply($organization, $message->fromPhone, $result->reason);
+            $this->reply($session, $message->fromPhone, $result->reason);
 
             return;
         }
@@ -516,7 +511,7 @@ class GestionNegocioAgent implements AgentInterface
 
         $resource = Resource::findOrFail($draft['resourceId']);
         $this->replyYesNo(
-            $organization,
+            $session,
             $message->fromPhone,
             $this->confirmarNuevoHorarioText($resource, $result->value),
         );
@@ -544,7 +539,7 @@ class GestionNegocioAgent implements AgentInterface
             $this->drafts->forget($session);
             $this->sessions->recordIntent($session, null);
             $this->reply(
-                $organization,
+                $session,
                 $message->fromPhone,
                 $this->botMessages->render('gestion.listo_horario', ['recurso' => $resource->display_name])
                     ?? "¡Listo! Actualicé el horario de *{$resource->display_name}*.",
@@ -556,13 +551,13 @@ class GestionNegocioAgent implements AgentInterface
         if (in_array($answer, self::NO_WORDS, true)) {
             $this->drafts->forget($session);
             $this->sessions->recordIntent($session, null);
-            $this->reply($organization, $message->fromPhone, $this->botMessages->render('gestion.no_cambie_horario') ?? 'Ok, no cambié el horario.');
+            $this->reply($session, $message->fromPhone, $this->botMessages->render('gestion.no_cambie_horario') ?? 'Ok, no cambié el horario.');
 
             return;
         }
 
         $this->replyYesNo(
-            $organization,
+            $session,
             $message->fromPhone,
             $this->confirmarNuevoHorarioText($resource, $draft['_pendingSchedule']),
         );
@@ -603,13 +598,17 @@ class GestionNegocioAgent implements AgentInterface
         ));
     }
 
-    private function reply(Organization $organization, string $toPhone, string $text): void
+    /**
+     * B3: por el Channel de la sesión, no por el de la Organization — el
+     * owner gestiona su negocio desde el número por el que escribió.
+     */
+    private function reply(ConversationSession $session, string $toPhone, string $text): void
     {
-        $this->notifications->send($organization, $toPhone, $text);
+        $this->replier->send($session, $toPhone, $text);
     }
 
-    private function replyYesNo(Organization $organization, string $toPhone, string $text): void
+    private function replyYesNo(ConversationSession $session, string $toPhone, string $text): void
     {
-        $this->notifications->sendButtons($organization, $toPhone, $text, self::YES_NO_BUTTONS);
+        $this->replier->sendButtons($session, $toPhone, $text, self::YES_NO_BUTTONS);
     }
 }

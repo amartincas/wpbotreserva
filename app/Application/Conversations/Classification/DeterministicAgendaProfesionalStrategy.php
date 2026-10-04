@@ -2,14 +2,14 @@
 
 namespace App\Application\Conversations\Classification;
 
-use App\Application\Booking\Agenda\ProfessionalResolver;
 use App\Application\Contracts\IntentClassifierStrategy;
 use App\Domain\Conversational\ConversationSession;
 use App\Domain\Conversational\InboundMessage;
 use App\Domain\Conversational\Intent;
 
 /**
- * Consulta de agenda del profesional (Fase 4): coincidencia determinista,
+ * Consulta de agenda (Fase 4; B7: del OWNER, sobre toda su Organization):
+ * coincidencia determinista,
  * nunca IA. Valida solo la FORMA de la referencia de fecha acá (mismo
  * criterio que DeterministicAdminCommandStrategy con "reservas dd/mm/aaaa"):
  * si la fecha es calendáricamente válida lo decide AgendaDateResolver
@@ -19,12 +19,14 @@ use App\Domain\Conversational\Intent;
  *
  * Doble verificación antes de reclamar el Intent: (a) el texto trae una
  * referencia de fecha con forma reconocible + estructura de PREGUNTA sobre
- * agenda, (b) quien escribe resuelve a un Resource de la Organization ya
- * resuelta para esta sesión (ProfessionalResolver — nunca owner_phone, ese
- * es el gate de DeterministicAdminCommandStrategy). Si (b) falla, esta
- * estrategia NO revela que el comando existe — devuelve null, mismo
- * criterio de seguridad que el resto de las estrategias deterministas del
- * dueño.
+ * agenda, (b) quien escribe es el owner_phone de la Organization ya
+ * resuelta para esta sesión — mismo gate que
+ * DeterministicAdminCommandStrategy. B7: antes era el profesional,
+ * identificado por el teléfono propio del Resource; la agenda es ahora una consulta
+ * administrativa del dueño desde el CENTRAL. Si (b) falla (un cliente,
+ * cualquier otro número), esta estrategia NO revela que el comando existe
+ * — devuelve null, mismo criterio de seguridad que el resto de las
+ * estrategias deterministas del dueño.
  *
  * Corrección de falso positivo (post-implementación): "mañana tengo turno
  * con el dentista" matcheaba antes porque "turno" ya es, por sí solo, uno
@@ -43,8 +45,6 @@ class DeterministicAgendaProfesionalStrategy implements IntentClassifierStrategy
     private const TENGO_PATTERN = '/\btengo\b/iu';
 
     private const INTERROGATIVE_PATTERN = '/\b(qu[eé]|cu[aá]nt[oa]s?|cu[aá]les)\b/iu';
-
-    public function __construct(private readonly ProfessionalResolver $professionals) {}
 
     public function attempt(InboundMessage $message, ConversationSession $session): ?Intent
     {
@@ -68,7 +68,7 @@ class DeterministicAgendaProfesionalStrategy implements IntentClassifierStrategy
             return null;
         }
 
-        if ($this->professionals->resolveFor($organization, $message->fromPhone) === null) {
+        if ($organization->owner_phone === null || $organization->owner_phone !== $message->fromPhone) {
             return null;
         }
 

@@ -18,7 +18,7 @@ use Carbon\CarbonImmutable;
  *
  * "hoy"/"mañana" usan Organization.timezone (nunca el timezone del
  * servidor) — mismo patrón ya probado en
- * SendProfessionalBookingConfirmationNotification::buildBodyParameters().
+ * SendOwnerBookingConfirmationNotification::bodyParameters().
  */
 class AgendaDateResolver
 {

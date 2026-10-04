@@ -54,6 +54,15 @@ class EloquentConversationSessionRepository implements ConversationSessionReposi
         }
     }
 
+    public function detachOrganization(ConversationSession $session): void
+    {
+        if ($session->organization_id !== null) {
+            $session->update(['organization_id' => null]);
+        }
+
+        $session->unsetRelation('organization');
+    }
+
     public function recordIntent(ConversationSession $session, ?Intent $intent): void
     {
         $session->update(['current_intent' => $intent?->value]);

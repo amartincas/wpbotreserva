@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Application\Contracts\NotificationSenderInterface;
+use App\Application\Contracts\OwnerNotifierInterface;
 use App\Application\Exceptions\NotificationDeliveryException;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Contracts\BookingSchedulerInterface;
@@ -16,6 +16,10 @@ use Illuminate\Support\Facades\Log;
  * CONFIRMED cuya fecha ya pasó queda así para siempre — nada la
  * transiciona sola, así que GestionReservaAgent la sigue ofreciendo como
  * "activa" indefinidamente.
+ *
+ * B6: los avisos van al owner (Organization.owner_phone) por el número
+ * CENTRAL, vía OwnerNotifierInterface — es donde el owner administra y
+ * donde contesta "ausente <id>".
  *
  * Dos pasos, en cada corrida diaria:
  * 1. Recordatorio (una sola vez por reserva, vía reminder_sent_at): le
@@ -42,10 +46,10 @@ class ReviewPastBookings extends Command
 
     protected $description = 'Recuerda al dueño turnos vencidos sin resolver y completa por defecto los que llevan más de 7 días sin respuesta';
 
-    public function handle(BookingSchedulerInterface $scheduler, NotificationSenderInterface $notifications): int
+    public function handle(BookingSchedulerInterface $scheduler, OwnerNotifierInterface $owner): int
     {
-        $reminded = $this->sendReminders($notifications);
-        $completed = $this->autoCompleteStale($scheduler, $notifications);
+        $reminded = $this->sendReminders($owner);
+        $completed = $this->autoCompleteStale($scheduler, $owner);
 
         $this->info("Recordatorios enviados: {$reminded}. Completadas automáticamente: {$completed}.");
 
@@ -62,7 +66,7 @@ class ReviewPastBookings extends Command
      * seteado bastante antes del día 7 — pero no vale la pena depender de
      * eso para que el mensaje sea coherente.
      */
-    private function sendReminders(NotificationSenderInterface $notifications): int
+    private function sendReminders(OwnerNotifierInterface $owner): int
     {
         $bookings = Booking::where('status', BookingStatus::CONFIRMED)
             ->where('ends_at', '<', now())
@@ -74,16 +78,14 @@ class ReviewPastBookings extends Command
 
         foreach ($bookings as $booking) {
             $booking->loadMissing(['organization', 'service', 'customer']);
-            $ownerPhone = $booking->organization->owner_phone;
 
-            if ($ownerPhone === null) {
+            if ($booking->organization->owner_phone === null) {
                 continue;
             }
 
             try {
-                $notifications->sendTemplate(
+                $owner->sendTemplate(
                     $booking->organization,
-                    $ownerPhone,
                     self::REMINDER_TEMPLATE,
                     self::TEMPLATE_LANGUAGE,
                     $this->bodyParameters($booking),
@@ -108,7 +110,7 @@ class ReviewPastBookings extends Command
         return $sent;
     }
 
-    private function autoCompleteStale(BookingSchedulerInterface $scheduler, NotificationSenderInterface $notifications): int
+    private function autoCompleteStale(BookingSchedulerInterface $scheduler, OwnerNotifierInterface $owner): int
     {
         $bookings = Booking::where('status', BookingStatus::CONFIRMED)
             ->where('ends_at', '<', now()->subDays(7))
@@ -129,8 +131,7 @@ class ReviewPastBookings extends Command
 
             $completed++;
 
-            $ownerPhone = $booking->organization->owner_phone;
-            if ($ownerPhone === null) {
+            if ($booking->organization->owner_phone === null) {
                 continue;
             }
 
@@ -139,9 +140,8 @@ class ReviewPastBookings extends Command
             // registra. El dueño puede ver el resultado igual con "reservas
             // dd/mm/aaaa".
             try {
-                $notifications->sendTemplate(
+                $owner->sendTemplate(
                     $booking->organization,
-                    $ownerPhone,
                     self::AUTO_COMPLETED_TEMPLATE,
                     self::TEMPLATE_LANGUAGE,
                     $this->bodyParameters($booking),

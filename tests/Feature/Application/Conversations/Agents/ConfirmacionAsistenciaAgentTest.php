@@ -89,7 +89,7 @@ function confirmAttendanceNeverCalledAi(): AiServiceInterface
     };
 }
 
-function confirmAttendanceFixtureOrganization(string $phoneNumberId = 'wamid-confirm-attendance'): Organization
+function confirmAttendanceFixtureOrganization(string $phoneNumberId = 'wamid-confirm-attendance', string $ownerPhone = '+573009999999'): Organization
 {
     $channel = Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
@@ -101,8 +101,7 @@ function confirmAttendanceFixtureOrganization(string $phoneNumberId = 'wamid-con
     $command = new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class));
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
-        ownerPhone: '+573009999999',
-        channel: $channel,
+        ownerPhone: $ownerPhone,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
@@ -111,6 +110,9 @@ function confirmAttendanceFixtureOrganization(string $phoneNumberId = 'wamid-con
             range(0, 6)
         ))],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -251,7 +253,7 @@ test('Booking ya pasado (starts_at en el pasado): no registra asistencia', funct
 
 test('multi-tenancy: una fila pendiente de otra Organization nunca se resuelve', function () {
     $orgA = confirmAttendanceFixtureOrganization('wamid-org-a');
-    $orgB = confirmAttendanceFixtureOrganization('wamid-org-b');
+    $orgB = confirmAttendanceFixtureOrganization('wamid-org-b', ownerPhone: '+573008888888');
     $bookingB = confirmAttendanceFixtureBooking($orgB, '+573001234567', now()->addDay()->setTime(9, 0));
     confirmAttendancePendingFor($bookingB);
 

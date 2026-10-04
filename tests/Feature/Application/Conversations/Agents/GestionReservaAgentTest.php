@@ -118,7 +118,6 @@ function gestionFixtureOrganization(string $phoneNumberId = 'wamid-gestion'): Or
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: '+573009999999',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
@@ -127,6 +126,9 @@ function gestionFixtureOrganization(string $phoneNumberId = 'wamid-gestion'): Or
             range(0, 6)
         ))],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -210,7 +212,7 @@ test('con una sola reserva activa y Organization en timezone distinto al servido
         'phone_number_id' => 'wamid-gestion-tz', 'status' => ChannelStatus::ACTIVE,
     ]);
     $result = (new RegisterOrganizationCommand(app(EntitlementCheckerInterface::class)))->handle(new RegisterOrganizationData(
-        organizationName: 'Barbería Don Carlos', ownerPhone: '+573009999999', channel: $channel,
+        organizationName: 'Barbería Don Carlos', ownerPhone: '+573009999999',
         city: 'Bogotá', address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: [new ResourceRegistrationData('Carlos', array_map(
@@ -218,6 +220,9 @@ test('con una sola reserva activa y Organization en timezone distinto al servido
             range(0, 6)
         ))],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
     $organization = Organization::findOrFail($result->organizationId);
     $organization->update(['timezone' => 'Asia/Tokyo']);
     $organization = $organization->fresh();

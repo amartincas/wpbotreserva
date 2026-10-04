@@ -8,6 +8,5 @@ final class ResourceRegistrationData
     public function __construct(
         public readonly string $name,
         public readonly array $weeklySchedule,
-        public readonly ?string $contactPhone = null,
     ) {}
 }

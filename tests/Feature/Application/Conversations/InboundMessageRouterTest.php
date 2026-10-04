@@ -4,9 +4,12 @@ use App\Application\Channels\PhoneNumberIdChannelResolver;
 use App\Application\Contracts\AgentInterface;
 use App\Application\Contracts\IntentClassifierInterface;
 use App\Application\Contracts\OrganizationlessAgentInterface;
+use App\Application\Contracts\OrganizationResolverInterface;
 use App\Application\Conversations\AgentSelector;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\InboundMessageRouter;
+use App\Application\Organizations\OrganizationResolution;
+use App\Application\Organizations\OwnerOrganizationResolver;
 use App\Application\Organizations\SingleOrganizationResolver;
 use App\Domain\Booking\Booking;
 use App\Domain\Booking\Contracts\ActiveBookingsFinderInterface;
@@ -17,14 +20,42 @@ use App\Domain\Conversational\Intent;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
+
+const ROUTER_FROM_PHONE = '+573001234567';
 
 function routerFixtureMessage(string $phoneNumberId, string $text = 'hola'): InboundMessage
 {
-    return new InboundMessage('wamid.msg-'.uniqid(), $phoneNumberId, '+573001234567', $text, now()->toImmutable());
+    return new InboundMessage('wamid.msg-'.uniqid(), $phoneNumberId, ROUTER_FROM_PHONE, $text, now()->toImmutable());
+}
+
+function routerFixtureChannel(string $phoneNumberId, ChannelRole $role = ChannelRole::BUSINESS, ChannelStatus $status = ChannelStatus::ACTIVE): Channel
+{
+    return Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'role' => $role,
+        'phone_number_id' => $phoneNumberId,
+        'status' => $status,
+    ]);
+}
+
+/**
+ * Un BUSINESS con su Organization vinculada — el caso normal del lado cliente.
+ */
+function routerFixtureBusiness(string $phoneNumberId): array
+{
+    $channel = routerFixtureChannel($phoneNumberId);
+    $organization = Organization::create(['name' => 'Barbería Don Carlos']);
+    $channel->organizations()->attach($organization->id, ['is_primary' => true]);
+
+    return [$channel, $organization];
 }
 
 /**
@@ -89,19 +120,72 @@ function routerFixtureActiveBookingsFinder(Collection $bookings = new Collection
     };
 }
 
-function buildRouter(Intent $intent, array &$agentCalls, ?array $agentsByIntent = null, ?ActiveBookingsFinderInterface $activeBookings = null): InboundMessageRouter
+/**
+ * Repositorio real que además registra cada recordIntent() — para probar
+ * que un Intent inválido para el rol nunca se graba, ni siquiera un
+ * instante antes de convertirse en FueraDeAlcance.
+ */
+function routerFixtureRecordingSessions(array &$recorded): EloquentConversationSessionRepository
 {
-    $agentsByIntent ??= [$intent->value => routerFixtureAgent($agentCalls)];
+    return new class($recorded) extends EloquentConversationSessionRepository
+    {
+        public function __construct(private array &$recorded) {}
+
+        public function recordIntent(ConversationSession $session, ?Intent $intent): void
+        {
+            $this->recorded[] = $intent;
+            parent::recordIntent($session, $intent);
+        }
+    };
+}
+
+function routerFixtureInconsistentResolver(string $reason): OwnerOrganizationResolver
+{
+    return new class($reason) extends OwnerOrganizationResolver
+    {
+        public function __construct(private readonly string $reason) {}
+
+        public function resolve(Channel $channel, ConversationSession $session): OrganizationResolution
+        {
+            return OrganizationResolution::inconsistent($this->reason);
+        }
+    };
+}
+
+/**
+ * $businessAgents por defecto: solo el Intent clasificado, con un Agent
+ * normal. $centralAgents por defecto: vacío — cada test del CENTRAL declara
+ * explícitamente su allowlist.
+ */
+function buildRouter(
+    Intent $intent,
+    array &$agentCalls,
+    ?array $businessAgents = null,
+    ?ActiveBookingsFinderInterface $activeBookings = null,
+    array $centralAgents = [],
+    ?EloquentConversationSessionRepository $sessions = null,
+    ?OwnerOrganizationResolver $centralOrganizations = null,
+    ?OrganizationResolverInterface $businessOrganizations = null,
+): InboundMessageRouter {
+    $businessAgents ??= [$intent->value => routerFixtureAgent($agentCalls)];
 
     return new InboundMessageRouter(
         new PhoneNumberIdChannelResolver,
-        new EloquentConversationSessionRepository,
-        new SingleOrganizationResolver,
+        $sessions ?? new EloquentConversationSessionRepository,
+        $businessOrganizations ?? new SingleOrganizationResolver,
+        $centralOrganizations ?? new OwnerOrganizationResolver,
         routerFixtureClassifier($intent),
-        new AgentSelector($agentsByIntent),
+        new AgentSelector(centralAgents: $centralAgents, businessAgents: $businessAgents),
         $activeBookings ?? routerFixtureActiveBookingsFinder(),
     );
 }
+
+function routerSessionFor(Channel $channel): ConversationSession
+{
+    return ConversationSession::where('channel_id', $channel->id)->where('customer_phone', ROUTER_FROM_PHONE)->firstOrFail();
+}
+
+// --- Channel ----------------------------------------------------------------
 
 test('rechaza el mensaje si el Channel no existe', function () {
     Event::fake([InboundMessageRejected::class]);
@@ -116,12 +200,7 @@ test('rechaza el mensaje si el Channel no existe', function () {
 
 test('rechaza el mensaje si el Channel existe pero no está activo', function () {
     Event::fake([InboundMessageRejected::class]);
-    Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-inactive',
-        'status' => ChannelStatus::SUSPENDED,
-    ]);
+    routerFixtureChannel('wamid-router-inactive', status: ChannelStatus::SUSPENDED);
     $calls = [];
     $router = buildRouter(Intent::Reserva, $calls);
 
@@ -131,85 +210,10 @@ test('rechaza el mensaje si el Channel existe pero no está activo', function ()
     expect($calls)->toBeEmpty();
 });
 
-test('Channel sin organización vinculada (Unregistered) rechaza un Intent que requiere Organization', function () {
-    Event::fake([InboundMessageRejected::class]);
-    Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-noorg',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $calls = [];
-    // Intent::Reserva mapea a un Agent normal (AgentInterface) que exige
-    // Organization — sin ella, AgentSelector no devuelve invoker.
-    $router = buildRouter(Intent::Reserva, $calls);
+// --- BUSINESS ---------------------------------------------------------------
 
-    $router->handle(routerFixtureMessage('wamid-router-noorg'));
-
-    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'agent_not_available');
-    expect($calls)->toBeEmpty();
-});
-
-test('Channel sin organización vinculada (Unregistered) sí delega en un OrganizationlessAgentInterface, con organización null', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-registro',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $calls = [];
-    $agent = routerFixtureOrganizationlessAgent($calls);
-    $router = buildRouter(Intent::RegistroNegocio, $calls, agentsByIntent: [Intent::RegistroNegocio->value => $agent]);
-
-    $message = routerFixtureMessage('wamid-router-registro', 'quiero registrar mi negocio');
-    $router->handle($message);
-
-    expect($calls)->toHaveCount(1);
-    expect($calls[0]['message'])->toBe($message);
-    expect($calls[0]['session']->channel_id)->toBe($channel->id);
-
-    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
-    expect($session->organization_id)->toBeNull();
-    expect($session->current_intent)->toBe('registro_negocio');
-});
-
-test('rechaza el mensaje si no hay Agent registrado para el Intent clasificado, pero ya persiste organización e intent', function () {
-    Event::fake([InboundMessageRejected::class]);
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-noagent',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
-    $calls = [];
-    // Fase 6: ya no puede usarse Intent::RegistroNegocio con una Organization
-    // ya vinculada — el guard de doble registro lo sustituye por
-    // RegistroNegocioBloqueado antes de llegar a este chequeo, así que deja
-    // de ser un ejemplo neutral de "sin Agent registrado". GestionNegocio no
-    // tiene ninguna guarda especial en el Router, sigue demostrando lo mismo.
-    $router = buildRouter(Intent::GestionNegocio, $calls, agentsByIntent: []);
-
-    $router->handle(routerFixtureMessage('wamid-router-noagent'));
-
-    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'agent_not_available');
-    expect($calls)->toBeEmpty();
-
-    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
-    expect($session->organization_id)->toBe($org->id);
-    expect($session->current_intent)->toBe('gestion_negocio');
-});
-
-test('camino feliz: resuelve todo y delega en el Agent correcto con la organización resuelta', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-happy',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+test('BUSINESS + Organization válida: camino feliz, delega con la Organization del vínculo', function () {
+    [$channel, $org] = routerFixtureBusiness('wamid-router-happy');
     $calls = [];
     $router = buildRouter(Intent::Reserva, $calls);
 
@@ -221,51 +225,95 @@ test('camino feliz: resuelve todo y delega en el Agent correcto con la organizac
     expect($calls[0]['organization']->is($org))->toBeTrue();
     expect($calls[0]['session']->channel_id)->toBe($channel->id);
 
-    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
+    $session = routerSessionFor($channel);
     expect($session->organization_id)->toBe($org->id);
     expect($session->current_intent)->toBe('reserva');
 });
 
-test('en el segundo mensaje de la misma conversación, reutiliza la organización ya resuelta sin necesitar el pivot', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-continuity',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+test('BUSINESS sin Organization: channel_unlinked, se loguea y nunca abre un onboarding (aunque el Intent sea RegistroNegocio)', function () {
+    Event::fake([InboundMessageRejected::class]);
+    Log::spy();
+    $channel = routerFixtureChannel('wamid-router-unlinked');
+    $registroCalls = [];
+    $router = buildRouter(
+        Intent::RegistroNegocio,
+        $registroCalls,
+        businessAgents: [Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($registroCalls)],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-unlinked', 'quiero registrar mi negocio'));
+
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'channel_unlinked');
+    Log::shouldHaveReceived('warning')->once()->withArgs(fn ($message, $context) => str_contains($message, 'BUSINESS sin Organization') && $context['channel_id'] === $channel->id);
+    expect($registroCalls)->toBeEmpty();
+    expect(routerSessionFor($channel)->current_intent)->toBeNull();
+});
+
+test('BUSINESS desvinculado entre dos mensajes: el segundo es channel_unlinked — la sesión memoizada ya no sirve de atajo', function () {
+    Event::fake([InboundMessageRejected::class]);
+    [$channel, $org] = routerFixtureBusiness('wamid-router-continuity');
     $calls = [];
     $router = buildRouter(Intent::Reserva, $calls);
 
     $router->handle(routerFixtureMessage('wamid-router-continuity', 'primer mensaje'));
-
-    // Se desvincula el channel de la organización a propósito: si el
-    // segundo mensaje volviera a resolver por el pivot, ahora daría
-    // Unregistered. Que siga funcionando prueba el shortcut de continuidad.
     $channel->organizations()->detach($org->id);
-
     $router->handle(routerFixtureMessage('wamid-router-continuity', 'segundo mensaje'));
 
-    expect($calls)->toHaveCount(2);
-    expect($calls[1]['organization']->is($org))->toBeTrue();
+    expect($calls)->toHaveCount(1);
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'channel_unlinked');
+});
+
+test('BUSINESS con resolución inconsistente (2+ vínculos): falla cerrado, sin Agent ni Intent grabado', function () {
+    Event::fake([InboundMessageRejected::class]);
+    Log::spy();
+    $channel = routerFixtureChannel('wamid-router-business-inconsistent');
+    $calls = [];
+    $inconsistent = new class implements OrganizationResolverInterface
+    {
+        public function resolve(Channel $channel, ConversationSession $session): OrganizationResolution
+        {
+            return OrganizationResolution::inconsistent('channel_multiple_organizations');
+        }
+    };
+    $router = buildRouter(Intent::Reserva, $calls, businessOrganizations: $inconsistent);
+
+    $router->handle(routerFixtureMessage('wamid-router-business-inconsistent'));
+
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'channel_multiple_organizations');
+    Log::shouldHaveReceived('error')->once();
+    expect($calls)->toBeEmpty();
+    expect(routerSessionFor($channel)->current_intent)->toBeNull();
+});
+
+test('Intent de CENTRAL recibido en BUSINESS (el owner escribe "gestionar negocio" al número del negocio): FueraDeAlcance del BUSINESS', function () {
+    [$channel] = routerFixtureBusiness('wamid-router-central-on-business');
+    $gestionCalls = [];
+    $outOfScopeCalls = [];
+    $recorded = [];
+    $router = buildRouter(
+        Intent::GestionNegocio,
+        $gestionCalls,
+        businessAgents: [Intent::FueraDeAlcance->value => routerFixtureOrganizationlessAgent($outOfScopeCalls)],
+        centralAgents: [Intent::GestionNegocio->value => routerFixtureAgent($gestionCalls)],
+        sessions: routerFixtureRecordingSessions($recorded),
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-central-on-business', 'gestionar negocio'));
+
+    expect($gestionCalls)->toBeEmpty();
+    expect($outOfScopeCalls)->toHaveCount(1);
+    expect(routerSessionFor($channel)->current_intent)->toBe(Intent::FueraDeAlcance->value);
+    expect($recorded)->toBe([Intent::FueraDeAlcance]);
 });
 
 test('con reservas activas, un mensaje nuevo clasificado como Reserva se desvía a ReservaOGestion en vez de ir directo al Agent', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-choice-reserva',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    [$channel] = routerFixtureBusiness('wamid-router-choice-reserva');
     $calls = [];
     $choiceCalls = [];
     $router = buildRouter(
         Intent::Reserva,
         $calls,
-        agentsByIntent: [
+        businessAgents: [
             Intent::Reserva->value => routerFixtureAgent($calls),
             Intent::ReservaOGestion->value => routerFixtureAgent($choiceCalls),
         ],
@@ -276,26 +324,17 @@ test('con reservas activas, un mensaje nuevo clasificado como Reserva se desvía
 
     expect($calls)->toBeEmpty(); // ReservaAgent nunca se invoca directo
     expect($choiceCalls)->toHaveCount(1);
-
-    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
-    expect($session->current_intent)->toBe(Intent::ReservaOGestion->value);
+    expect(routerSessionFor($channel)->current_intent)->toBe(Intent::ReservaOGestion->value);
 });
 
 test('con reservas activas, un mensaje nuevo clasificado como GestionReserva también se desvía a ReservaOGestion', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-choice-gestion',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    routerFixtureBusiness('wamid-router-choice-gestion');
     $calls = [];
     $choiceCalls = [];
     $router = buildRouter(
         Intent::GestionReserva,
         $calls,
-        agentsByIntent: [
+        businessAgents: [
             Intent::GestionReserva->value => routerFixtureAgent($calls),
             Intent::ReservaOGestion->value => routerFixtureAgent($choiceCalls),
         ],
@@ -309,14 +348,7 @@ test('con reservas activas, un mensaje nuevo clasificado como GestionReserva tam
 });
 
 test('sin reservas activas, Reserva va directo al Agent sin pasar por la desambiguación', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-nochoice',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    routerFixtureBusiness('wamid-router-nochoice');
     $calls = [];
     $router = buildRouter(Intent::Reserva, $calls); // activeBookings default: vacío
 
@@ -325,86 +357,8 @@ test('sin reservas activas, Reserva va directo al Agent sin pasar por la desambi
     expect($calls)->toHaveCount(1);
 });
 
-test('Fase 6: Channel con Organization ya registrada + arranque fresco de RegistroNegocio se sustituye por RegistroNegocioBloqueado', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-doble-registro',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
-    $registroCalls = [];
-    $bloqueadoCalls = [];
-    // routerFixtureClassifier devuelve RegistroNegocio sin importar de dónde
-    // vino (botón o IA) — el guard del Router actúa sobre el Intent ya
-    // clasificado, nunca sobre quién lo produjo, así que este único test
-    // cubre ambas rutas por construcción.
-    $router = buildRouter(
-        Intent::RegistroNegocio,
-        $registroCalls,
-        agentsByIntent: [
-            Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($registroCalls),
-            Intent::RegistroNegocioBloqueado->value => routerFixtureAgent($bloqueadoCalls),
-        ],
-    );
-
-    $router->handle(routerFixtureMessage('wamid-router-doble-registro', 'quiero registrar mi negocio'));
-
-    expect($registroCalls)->toBeEmpty(); // RegistroNegocioAgent nunca se invoca
-    expect($bloqueadoCalls)->toHaveCount(1);
-    expect($bloqueadoCalls[0]['organization']->is($org))->toBeTrue();
-
-    $session = ConversationSession::where('channel_id', $channel->id)->firstOrFail();
-    expect($session->current_intent)->toBe(Intent::RegistroNegocioBloqueado->value);
-});
-
-test('Fase 6: un registro de negocio YA en curso (no fresco) nunca se bloquea, aunque la sesión tenga una Organization memoizada', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-registro-en-curso',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    // Caso real ya cubierto en RegistroNegocioAgentTest: una sesión puede
-    // quedar memoizada a una Organization vieja mientras un RegistroNegocio
-    // sigue genuinamente en curso. Acá se sembra current_intent = RegistroNegocio
-    // ANTES del mensaje (no vía un primer mensaje real) para que
-    // $isFreshFlow sea false de entrada, sin que la Organization vieja haya
-    // sido producto de ESTE guard — exactamente la distinción que el guard
-    // tiene que respetar: Organization existente + NO fresco = nunca bloquear.
-    $staleOrg = Organization::create(['name' => 'Negocio Viejo']);
-    $channel->organizations()->attach($staleOrg->id, ['is_primary' => true]);
-    $sessions = new EloquentConversationSessionRepository;
-    $session = $sessions->findOrCreateFor($channel, '+573001234567');
-    $sessions->recordIntent($session, Intent::RegistroNegocio);
-
-    $registroCalls = [];
-    $bloqueadoCalls = [];
-    $router = buildRouter(
-        Intent::RegistroNegocio, // el classifier de continuidad real repetiría esto mismo
-        $registroCalls,
-        agentsByIntent: [
-            Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($registroCalls),
-            Intent::RegistroNegocioBloqueado->value => routerFixtureAgent($bloqueadoCalls),
-        ],
-    );
-
-    $router->handle(routerFixtureMessage('wamid-router-registro-en-curso', 'Impulzar'));
-
-    expect($bloqueadoCalls)->toBeEmpty();
-    expect($registroCalls)->toHaveCount(1);
-});
-
 test('mid-flujo (current_intent ya activo), nunca se re-evalúa la desambiguación aunque haya reservas activas', function () {
-    $channel = Channel::create([
-        'provider' => ChannelProvider::META_CLOUD_API,
-        'channel_type' => ChannelType::WHATSAPP,
-        'phone_number_id' => 'wamid-router-midflow',
-        'status' => ChannelStatus::ACTIVE,
-    ]);
-    $org = Organization::create(['name' => 'Barbería Don Carlos']);
-    $channel->organizations()->attach($org->id, ['is_primary' => true]);
+    routerFixtureBusiness('wamid-router-midflow');
     $calls = [];
     $choiceCalls = [];
 
@@ -427,8 +381,9 @@ test('mid-flujo (current_intent ya activo), nunca se re-evalúa la desambiguaci�
         new PhoneNumberIdChannelResolver,
         new EloquentConversationSessionRepository,
         new SingleOrganizationResolver,
+        new OwnerOrganizationResolver,
         $continuityLikeClassifier,
-        new AgentSelector([
+        new AgentSelector(centralAgents: [], businessAgents: [
             Intent::Reserva->value => routerFixtureAgent($calls),
             Intent::ReservaOGestion->value => routerFixtureAgent($choiceCalls),
         ]),
@@ -445,4 +400,249 @@ test('mid-flujo (current_intent ya activo), nunca se re-evalúa la desambiguaci�
     $router->handle(routerFixtureMessage('wamid-router-midflow', 'segundo mensaje'));
     expect($choiceCalls)->toHaveCount(2);
     expect($calls)->toBeEmpty();
+});
+
+// --- CENTRAL ----------------------------------------------------------------
+
+test('CENTRAL + owner sin Organization (teléfono desconocido): onboarding permitido, organización null', function () {
+    $central = routerFixtureChannel('wamid-router-central-new', ChannelRole::CENTRAL);
+    Organization::create(['name' => 'Otro Negocio', 'owner_phone' => '+573008888888']);
+    $calls = [];
+    $router = buildRouter(
+        Intent::RegistroNegocio,
+        $calls,
+        centralAgents: [Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($calls)],
+    );
+
+    $message = routerFixtureMessage('wamid-router-central-new', 'quiero registrar mi negocio');
+    $router->handle($message);
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['message'])->toBe($message);
+    expect($calls[0]['session']->channel_id)->toBe($central->id);
+
+    $session = routerSessionFor($central);
+    expect($session->organization_id)->toBeNull();
+    expect($session->current_intent)->toBe('registro_negocio');
+});
+
+test('CENTRAL + owner con Organization: la resuelve por owner_phone y delega la administración con esa Organization', function () {
+    $central = routerFixtureChannel('wamid-router-central-owner', ChannelRole::CENTRAL);
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'owner_phone' => ROUTER_FROM_PHONE]);
+    $calls = [];
+    $router = buildRouter(
+        Intent::GestionNegocio,
+        $calls,
+        centralAgents: [Intent::GestionNegocio->value => routerFixtureAgent($calls)],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-central-owner', 'gestionar negocio'));
+
+    expect($calls)->toHaveCount(1);
+    expect($calls[0]['organization']->is($org))->toBeTrue();
+    expect(routerSessionFor($central)->organization_id)->toBe($org->id);
+});
+
+test('CENTRAL + owner desconocido con un Intent que requiere Organization: FueraDeAlcance del CENTRAL, nunca el Intent original', function () {
+    $central = routerFixtureChannel('wamid-router-central-unknown', ChannelRole::CENTRAL);
+    $gestionCalls = [];
+    $outOfScopeCalls = [];
+    $recorded = [];
+    $router = buildRouter(
+        Intent::GestionNegocio,
+        $gestionCalls,
+        centralAgents: [
+            Intent::GestionNegocio->value => routerFixtureAgent($gestionCalls),
+            Intent::FueraDeAlcance->value => routerFixtureOrganizationlessAgent($outOfScopeCalls),
+        ],
+        sessions: routerFixtureRecordingSessions($recorded),
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-central-unknown', 'gestionar negocio'));
+
+    expect($gestionCalls)->toBeEmpty();
+    expect($outOfScopeCalls)->toHaveCount(1);
+    expect(routerSessionFor($central)->current_intent)->toBe(Intent::FueraDeAlcance->value);
+    expect($recorded)->toBe([Intent::FueraDeAlcance]);
+});
+
+test('CENTRAL + owner con más de una Organization: falla cerrado, se loguea, sin Agent ni Intent grabado', function () {
+    Event::fake([InboundMessageRejected::class]);
+    Log::spy();
+    $central = routerFixtureChannel('wamid-router-central-ambiguous', ChannelRole::CENTRAL);
+    $calls = [];
+    // UNIQUE(owner_phone) impide construir el dato real; el resolver falso
+    // devuelve exactamente lo que OwnerOrganizationResolver devolvería.
+    $router = buildRouter(
+        Intent::GestionNegocio,
+        $calls,
+        centralAgents: [Intent::GestionNegocio->value => routerFixtureAgent($calls)],
+        centralOrganizations: routerFixtureInconsistentResolver('owner_multiple_organizations'),
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-central-ambiguous', 'gestionar negocio'));
+
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'owner_multiple_organizations');
+    Log::shouldHaveReceived('error')->once()->withArgs(fn ($message, $context) => $context['reason'] === 'owner_multiple_organizations');
+    expect($calls)->toBeEmpty();
+    expect(routerSessionFor($central)->current_intent)->toBeNull();
+});
+
+test('CENTRAL vinculado a una Organization (SQL manual): inconsistencia, se rechaza y se loguea como error', function () {
+    Event::fake([InboundMessageRejected::class]);
+    Log::spy();
+    $central = routerFixtureChannel('wamid-router-central-linked', ChannelRole::CENTRAL);
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'owner_phone' => ROUTER_FROM_PHONE]);
+    DB::table('channel_organization')->insert([
+        'channel_id' => $central->id, 'organization_id' => $org->id, 'is_primary' => true,
+        'created_at' => now(), 'updated_at' => now(),
+    ]);
+    $calls = [];
+    $router = buildRouter(
+        Intent::GestionNegocio,
+        $calls,
+        centralAgents: [Intent::GestionNegocio->value => routerFixtureAgent($calls)],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-central-linked', 'gestionar negocio'));
+
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'central_linked');
+    Log::shouldHaveReceived('error')->once()->withArgs(fn ($message, $context) => str_contains($message, 'CENTRAL') && $context['channel_id'] === $central->id);
+    expect($calls)->toBeEmpty();
+    expect(ConversationSession::where('channel_id', $central->id)->exists())->toBeFalse();
+});
+
+test('CENTRAL nunca obtiene Organization desde el pivot ni desde una sesión memoizada: quien no es owner queda sin Organization', function () {
+    $central = routerFixtureChannel('wamid-router-central-memo', ChannelRole::CENTRAL);
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'owner_phone' => '+573008888888']);
+    // Sesión memoizada a una Organization de la que este teléfono NO es owner
+    // (ej. un cliente de la época en que el CENTRAL era el número del piloto).
+    ConversationSession::create([
+        'channel_id' => $central->id,
+        'customer_phone' => ROUTER_FROM_PHONE,
+        'organization_id' => $org->id,
+    ]);
+    $calls = [];
+    $router = buildRouter(
+        Intent::RegistroNegocio,
+        $calls,
+        centralAgents: [Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($calls)],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-central-memo', 'quiero registrar mi negocio'));
+
+    expect($calls)->toHaveCount(1);
+    expect(routerSessionFor($central)->organization_id)->toBeNull();
+});
+
+test('Intent de BUSINESS recibido en CENTRAL ("quiero reservar"): FueraDeAlcance del CENTRAL, sin grabar nunca el Intent original', function () {
+    $central = routerFixtureChannel('wamid-router-business-on-central', ChannelRole::CENTRAL);
+    Organization::create(['name' => 'Barbería Don Carlos', 'owner_phone' => ROUTER_FROM_PHONE]);
+    $reservaCalls = [];
+    $outOfScopeCalls = [];
+    $recorded = [];
+    $router = buildRouter(
+        Intent::Reserva,
+        $reservaCalls,
+        businessAgents: [Intent::Reserva->value => routerFixtureAgent($reservaCalls)],
+        centralAgents: [Intent::FueraDeAlcance->value => routerFixtureOrganizationlessAgent($outOfScopeCalls)],
+        sessions: routerFixtureRecordingSessions($recorded),
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-business-on-central', 'quiero reservar un turno'));
+
+    expect($reservaCalls)->toBeEmpty();
+    expect($outOfScopeCalls)->toHaveCount(1);
+    expect(routerSessionFor($central)->current_intent)->toBe(Intent::FueraDeAlcance->value);
+    expect($recorded)->toBe([Intent::FueraDeAlcance]);
+});
+
+test('Reset funciona en los dos roles', function () {
+    $central = routerFixtureChannel('wamid-router-reset-central', ChannelRole::CENTRAL);
+    [$business] = routerFixtureBusiness('wamid-router-reset-business');
+    $resetCalls = [];
+    $reset = routerFixtureOrganizationlessAgent($resetCalls);
+    $router = buildRouter(
+        Intent::Reset,
+        $resetCalls,
+        businessAgents: [Intent::Reset->value => $reset],
+        centralAgents: [Intent::Reset->value => $reset],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-reset-central', 'salir'));
+    $router->handle(routerFixtureMessage('wamid-router-reset-business', 'salir'));
+
+    expect($resetCalls)->toHaveCount(2);
+    expect($resetCalls[0]['session']->channel_id)->toBe($central->id);
+    expect($resetCalls[1]['session']->channel_id)->toBe($business->id);
+});
+
+test('sin Agent para el Intent ni FueraDeAlcance registrado: agent_not_available, y lo grabado es FueraDeAlcance, nunca el Intent inválido', function () {
+    Event::fake([InboundMessageRejected::class]);
+    [$channel, $org] = routerFixtureBusiness('wamid-router-noagent');
+    $calls = [];
+    $router = buildRouter(Intent::GestionNegocio, $calls, businessAgents: []);
+
+    $router->handle(routerFixtureMessage('wamid-router-noagent'));
+
+    Event::assertDispatched(InboundMessageRejected::class, fn ($e) => $e->reason === 'agent_not_available');
+    expect($calls)->toBeEmpty();
+
+    $session = routerSessionFor($channel);
+    expect($session->organization_id)->toBe($org->id);
+    expect($session->current_intent)->toBe(Intent::FueraDeAlcance->value);
+});
+
+test('Fase 6 en el CENTRAL: owner con Organization + arranque fresco de RegistroNegocio se sustituye por RegistroNegocioBloqueado', function () {
+    $central = routerFixtureChannel('wamid-router-doble-registro', ChannelRole::CENTRAL);
+    $org = Organization::create(['name' => 'Barbería Don Carlos', 'owner_phone' => ROUTER_FROM_PHONE]);
+    $registroCalls = [];
+    $bloqueadoCalls = [];
+    // routerFixtureClassifier devuelve RegistroNegocio sin importar de dónde
+    // vino (botón o IA) — el guard del Router actúa sobre el Intent ya
+    // clasificado, nunca sobre quién lo produjo, así que este único test
+    // cubre ambas rutas por construcción.
+    $router = buildRouter(
+        Intent::RegistroNegocio,
+        $registroCalls,
+        centralAgents: [
+            Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($registroCalls),
+            Intent::RegistroNegocioBloqueado->value => routerFixtureAgent($bloqueadoCalls),
+        ],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-doble-registro', 'quiero registrar mi negocio'));
+
+    expect($registroCalls)->toBeEmpty(); // RegistroNegocioAgent nunca se invoca
+    expect($bloqueadoCalls)->toHaveCount(1);
+    expect($bloqueadoCalls[0]['organization']->is($org))->toBeTrue();
+    expect(routerSessionFor($central)->current_intent)->toBe(Intent::RegistroNegocioBloqueado->value);
+});
+
+test('Fase 6 en el CENTRAL: un registro YA en curso (no fresco) nunca se bloquea, aunque el owner ya resuelva a una Organization', function () {
+    $central = routerFixtureChannel('wamid-router-registro-en-curso', ChannelRole::CENTRAL);
+    // Se sembra current_intent = RegistroNegocio ANTES del mensaje para que
+    // $isFreshFlow sea false de entrada — exactamente la distinción que el
+    // guard tiene que respetar: Organization existente + NO fresco = nunca
+    // bloquear.
+    Organization::create(['name' => 'Negocio Viejo', 'owner_phone' => ROUTER_FROM_PHONE]);
+    $sessions = new EloquentConversationSessionRepository;
+    $session = $sessions->findOrCreateFor($central, ROUTER_FROM_PHONE);
+    $sessions->recordIntent($session, Intent::RegistroNegocio);
+
+    $registroCalls = [];
+    $bloqueadoCalls = [];
+    $router = buildRouter(
+        Intent::RegistroNegocio, // el classifier de continuidad real repetiría esto mismo
+        $registroCalls,
+        centralAgents: [
+            Intent::RegistroNegocio->value => routerFixtureOrganizationlessAgent($registroCalls),
+            Intent::RegistroNegocioBloqueado->value => routerFixtureAgent($bloqueadoCalls),
+        ],
+    );
+
+    $router->handle(routerFixtureMessage('wamid-router-registro-en-curso', 'Impulzar'));
+
+    expect($bloqueadoCalls)->toBeEmpty();
+    expect($registroCalls)->toHaveCount(1);
 });

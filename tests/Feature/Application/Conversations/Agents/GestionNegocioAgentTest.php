@@ -1,10 +1,11 @@
 <?php
 
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
-use App\Application\Contracts\NotificationSenderInterface;
 use App\Application\Conversations\Agents\GestionNegocioAgent;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
+use App\Application\Conversations\ConversationReplier;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Tenancy\AddResourceCommand;
 use App\Application\Tenancy\AddServiceCommand;
@@ -21,6 +22,7 @@ use App\Domain\Scheduling\Resource;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 
@@ -47,24 +49,24 @@ function gestionNegocioFakeDraftRepository(): ConversationDraftRepositoryInterfa
     };
 }
 
-function gestionNegocioFakeNotificationSender(array &$sent): NotificationSenderInterface
+function gestionNegocioFakeReplier(array &$sent): ConversationReplier
 {
-    return new class($sent) implements NotificationSenderInterface
+    return new ConversationReplier(new class($sent) implements ChannelClientInterface
     {
         public function __construct(private array &$sent) {}
 
-        public function send(Organization $organization, string $toPhoneE164, string $message): void
+        public function sendTextMessage(Channel $channel, string $to, string $message): void
         {
-            $this->sent[] = compact('organization', 'toPhoneE164', 'message');
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'message' => $message];
         }
 
-        public function sendTemplate(Organization $organization, string $toPhoneE164, string $templateName, string $language, array $bodyParameters): void {}
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void {}
 
-        public function sendButtons(Organization $organization, string $toPhoneE164, string $bodyText, array $buttons): void
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void
         {
-            $this->sent[] = ['organization' => $organization, 'toPhoneE164' => $toPhoneE164, 'message' => $bodyText, 'buttons' => $buttons];
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'message' => $bodyText, 'buttons' => $buttons];
         }
-    };
+    });
 }
 
 /**
@@ -118,12 +120,14 @@ function gestionNegocioFixtureOrganization(int $resourceCount = 1): Organization
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: '+573009999999',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: $resources,
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -147,7 +151,7 @@ function buildGestionNegocioAgent(ConversationDraftRepositoryInterface $drafts, 
     return new GestionNegocioAgent(
         $drafts,
         new EloquentConversationSessionRepository,
-        gestionNegocioFakeNotificationSender($sent),
+        gestionNegocioFakeReplier($sent),
         new AddServiceCommand(app(EntitlementCheckerInterface::class)),
         new AddResourceCommand(app(EntitlementCheckerInterface::class)),
         new ReplaceResourceScheduleCommand,
@@ -275,25 +279,19 @@ test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su 
 
     $agent->handle(gestionNegocioFixtureMessage('Edgar Torres'), $session, $organization);
 
-    // Fase 2A: tras el nombre, el siguiente estado es el teléfono
-    // obligatorio del profesional — no el horario todavía.
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-    expect($sent[array_key_last($sent)]['message'])->toContain('Edgar Torres');
-
-    $agent->handle(gestionNegocioFixtureMessage('+573007778899'), $session, $organization);
-
+    // B8: tras el nombre, directo al horario — sin teléfono del recurso.
     expect($drafts->get($session)['_awaitingNewResourceSchedule'])->toBeTrue();
     expect($sent[array_key_last($sent)]['message'])->toContain('Edgar Torres');
 
     $agent->handle(gestionNegocioFixtureMessage('martes de 10 a 18'), $session, $organization);
 
     // La persona ya quedó creada como recurso real del negocio, con su
-    // horario y su teléfono de contacto (cast por PhoneNumberCast).
+    // horario (B8: sin teléfono propio).
     $resource = Resource::where('display_name', 'Edgar Torres')->firstOrFail();
     expect($resource->organization_id)->toBe($organization->id);
     expect($resource->schedules)->toHaveCount(1);
     expect($resource->schedules->first()->weekday)->toBe(2);
-    expect($resource->contact_phone->value())->toBe('+573007778899');
+    expect(array_key_exists('contact_phone', $resource->getAttributes()))->toBeFalse();
     expect($drafts->get($session)['_awaitingAddAnotherServiceResource'])->toBeTrue();
 
     $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization);
@@ -304,7 +302,7 @@ test('caso real (segunda ronda): elegir "0" da de alta una persona nueva con su 
     expect($service->resources->first()->display_name)->toBe('Edgar Torres');
 });
 
-test('Fase 2A: un rechazo explícito y un teléfono inválido re-preguntan sin avanzar al horario, también en GestionNegocioAgent', function () {
+test('B8: agregar una persona nueva desde la gestión nunca pregunta un teléfono', function () {
     $organization = gestionNegocioFixtureOrganization(resourceCount: 2);
     $session = gestionNegocioFixtureSession($organization);
     $drafts = gestionNegocioFakeDraftRepository();
@@ -319,19 +317,9 @@ test('Fase 2A: un rechazo explícito y un teléfono inválido re-preguntan sin a
     $agent->handle(gestionNegocioFixtureMessage('0'), $session, $organization); // "Agregar una persona nueva"
     $agent->handle(gestionNegocioFixtureMessage('Edgar Torres'), $session, $organization);
 
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-    $countBeforeRetries = count($sent);
-
-    $agent->handle(gestionNegocioFixtureMessage('no'), $session, $organization); // rechazo explícito
-    expect($sent[array_key_last($sent)]['message'])->toContain('Necesitamos');
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-
-    $agent->handle(gestionNegocioFixtureMessage('no tengo'), $session, $organization); // ambiguo
-    expect($sent[array_key_last($sent)]['message'])->toContain('No pude reconocer el número');
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-
-    expect(count($sent))->toBe($countBeforeRetries + 2); // ninguno de los 2 reintentos avanzó el flujo
-    expect(Resource::where('display_name', 'Edgar Torres')->exists())->toBeFalse(); // todavía no se creó
+    expect($drafts->get($session)['_awaitingNewResourceSchedule'])->toBeTrue();
+    expect($drafts->get($session))->not->toHaveKey('_awaitingNewResourceContactPhone');
+    expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, 'número de WhatsApp')))->toHaveCount(0);
 });
 
 test('caso real: Agregar servicio con varios recursos en el negocio pregunta quién lo presta — NO lo habilita para todos por default', function () {
@@ -529,4 +517,30 @@ test('Fase 3: el saludo se manda en burbuja aparte antes de la primera pregunta,
 
     // No se repite en el segundo mensaje de la misma conversación.
     expect(collect($sent)->pluck('message')->filter(fn ($m) => $m === '¡Hola! Soy el asistente de WpbotReserva.'))->toHaveCount(1);
+});
+
+test('B3: el owner que gestiona desde el CENTRAL recibe todas las respuestas (texto y botones) por el CENTRAL', function () {
+    $organization = gestionNegocioFixtureOrganization();
+    $central = Channel::create([
+        'provider' => ChannelProvider::META_CLOUD_API,
+        'channel_type' => ChannelType::WHATSAPP,
+        'role' => ChannelRole::CENTRAL,
+        'phone_number_id' => 'wamid-gestion-negocio-central',
+        'status' => ChannelStatus::ACTIVE,
+    ]);
+    $session = ConversationSession::create([
+        'channel_id' => $central->id,
+        'customer_phone' => '+573009999999',
+        'organization_id' => $organization->id,
+    ]);
+    $sent = [];
+    $agent = buildGestionNegocioAgent(gestionNegocioFakeDraftRepository(), $sent, gestionNegocioNeverCalledAi());
+
+    $agent->handle(gestionNegocioFixtureMessage('administrar mi negocio'), $session, $organization);
+
+    expect($sent)->toHaveCount(2);
+    expect(array_key_exists('buttons', $sent[1]))->toBeTrue();
+    foreach ($sent as $outgoing) {
+        expect($outgoing['channel']->is($central))->toBeTrue();
+    }
 });

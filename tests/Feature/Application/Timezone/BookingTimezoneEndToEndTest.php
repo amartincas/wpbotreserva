@@ -2,13 +2,13 @@
 
 use App\Application\Booking\Agenda\AgendaDateResolver;
 use App\Application\Booking\Agenda\AgendaQueryService;
-use App\Application\Booking\Agenda\ProfessionalResolver;
 use App\Application\Booking\CancelBookingCommand;
 use App\Application\Booking\ConfirmBookingCommand;
 use App\Application\Booking\CreateBookingCommand;
 use App\Application\Booking\CreateBookingData;
 use App\Application\Booking\MarkBookingNoShowCommand;
 use App\Application\Booking\RescheduleBookingCommand;
+use App\Application\Contracts\ChannelClientInterface;
 use App\Application\Contracts\ConversationDraftRepositoryInterface;
 use App\Application\Contracts\EntitlementCheckerInterface;
 use App\Application\Contracts\NotificationSenderInterface;
@@ -18,6 +18,7 @@ use App\Application\Conversations\Agents\BookingChoiceAgent;
 use App\Application\Conversations\Agents\GestionReservaAgent;
 use App\Application\Conversations\Agents\ReservaAgent;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
+use App\Application\Conversations\ConversationReplier;
 use App\Application\Conversations\EloquentConversationSessionRepository;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Tenancy\RegisterOrganizationCommand;
@@ -98,6 +99,26 @@ function tzE2eFakeNotificationSender(array &$sent): NotificationSenderInterface
     };
 }
 
+function tzE2eFakeReplier(array &$sent): ConversationReplier
+{
+    return new ConversationReplier(new class($sent) implements ChannelClientInterface
+    {
+        public function __construct(private array &$sent) {}
+
+        public function sendTextMessage(Channel $channel, string $to, string $message): void
+        {
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'message' => $message];
+        }
+
+        public function sendTemplateMessage(Channel $channel, string $to, string $templateName, string $language, array $bodyParameters): void {}
+
+        public function sendButtonsMessage(Channel $channel, string $to, string $bodyText, array $buttons): void
+        {
+            $this->sent[] = ['channel' => $channel, 'toPhoneE164' => $to, 'message' => $bodyText, 'buttons' => $buttons];
+        }
+    });
+}
+
 function tzE2eQueuedAi(array $responses): AiServiceInterface
 {
     return new class($responses) implements AiServiceInterface
@@ -133,16 +154,17 @@ function tzE2eFixtureOrganization(string $timezone, string $phoneNumberId): Orga
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: '+573009999999',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: [new ResourceRegistrationData(
             'Carlos',
             array_map(fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: '00:00', endTime: '23:59'), range(0, 6)),
-            contactPhone: '+573005550000',
         )],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     $organization = Organization::findOrFail($result->organizationId);
     $organization->update(['timezone' => $timezone]);
@@ -172,16 +194,17 @@ function tzE2eFixtureOrganizationBoundedHours(string $timezone, string $phoneNum
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Barbería Don Carlos',
         ownerPhone: '+573009999999',
-        channel: $channel,
         city: 'Bogotá',
         address: 'Cra 7 # 45-12',
         services: [new ServiceRegistrationData('Corte de cabello', 30, resourceKeys: [0])],
         resources: [new ResourceRegistrationData(
             'Carlos',
             array_map(fn (int $weekday) => new WeeklyScheduleSlot(weekday: $weekday, startTime: $startTime, endTime: $endTime), range(0, 6)),
-            contactPhone: '+573005550000',
         )],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     $organization = Organization::findOrFail($result->organizationId);
     $organization->update(['timezone' => $timezone]);
@@ -233,18 +256,19 @@ function tzE2eGestionReservaAgent(ConversationDraftRepositoryInterface $drafts, 
 function tzE2eAgendaProfesionalAgent(array &$sent): AgendaProfesionalAgent
 {
     return new AgendaProfesionalAgent(
-        new ProfessionalResolver,
         new AgendaDateResolver,
         new AgendaQueryService,
-        tzE2eFakeNotificationSender($sent),
+        tzE2eFakeReplier($sent),
         app(BotMessageRepository::class),
+        new EloquentConversationSessionRepository,
     );
 }
 
 function tzE2eAdminCommandAgent(array &$sent): AdminCommandAgent
 {
     return new AdminCommandAgent(
-        tzE2eFakeNotificationSender($sent),
+        tzE2eFakeReplier($sent),
+        new EloquentConversationSessionRepository,
         new CancelBookingCommand(app(BookingSchedulerInterface::class)),
         new ConfirmBookingCommand(app(BookingSchedulerInterface::class)),
         new MarkBookingNoShowCommand(app(BookingSchedulerInterface::class)),
@@ -342,9 +366,10 @@ test('agenda profesional después de creación real: encuentra la reserva en la 
 
     $agendaSent = [];
     $agendaAgent = tzE2eAgendaProfesionalAgent($agendaSent);
-    $agendaSession = tzE2eFixtureSession($organization, '+573005550000');
+    // B7: la agenda la consulta el owner (owner_phone), no el profesional.
+    $agendaSession = tzE2eFixtureSession($organization, '+573009999999');
 
-    $agendaAgent->handle(tzE2eFixtureMessage('¿cuántas citas tengo mañana?', '+573005550000'), $agendaSession, $organization);
+    $agendaAgent->handle(tzE2eFixtureMessage('¿cuántas citas tengo mañana?', '+573009999999'), $agendaSession, $organization);
 
     $label = CarbonImmutable::parse($targetDate)->format('d/m/Y');
     expect($agendaSent[0]['message'])->toBe("Tenés 1 cita para {$label}.");
@@ -375,10 +400,11 @@ test('agenda profesional con fecha EXPLÍCITA (dd/mm/aaaa) y timezone no-default
 
     $agendaSent = [];
     $agendaAgent = tzE2eAgendaProfesionalAgent($agendaSent);
-    $agendaSession = tzE2eFixtureSession($organization, '+573005550000');
+    // B7: la agenda la consulta el owner (owner_phone), no el profesional.
+    $agendaSession = tzE2eFixtureSession($organization, '+573009999999');
     $label = $targetDate->format('d/m/Y');
 
-    $agendaAgent->handle(tzE2eFixtureMessage("¿qué reservas tengo el {$label}?", '+573005550000'), $agendaSession, $organization);
+    $agendaAgent->handle(tzE2eFixtureMessage("¿qué reservas tengo el {$label}?", '+573009999999'), $agendaSession, $organization);
 
     expect($agendaSent[0]['message'])->toContain('10:00');
     expect($agendaSent[0]['message'])->not->toContain('No tenés citas');
@@ -421,9 +447,10 @@ test('agenda profesional después de reprogramación real: la encuentra en la nu
 
     $agendaSent = [];
     $agendaAgent = tzE2eAgendaProfesionalAgent($agendaSent);
-    $agendaSession = tzE2eFixtureSession($organization, '+573005550000');
+    // B7: la agenda la consulta el owner (owner_phone), no el profesional.
+    $agendaSession = tzE2eFixtureSession($organization, '+573009999999');
 
-    $agendaAgent->handle(tzE2eFixtureMessage('¿qué reservas tengo mañana?', '+573005550000'), $agendaSession, $organization);
+    $agendaAgent->handle(tzE2eFixtureMessage('¿qué reservas tengo mañana?', '+573009999999'), $agendaSession, $organization);
     // Fase 5: el detalle de agenda ya no muestra el id de la reserva (solo
     // hora + nombre del cliente) — 'Ana' identifica la reserva sin ambigüedad
     // porque es la única de este test.

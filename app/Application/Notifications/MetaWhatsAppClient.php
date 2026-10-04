@@ -26,7 +26,7 @@ use Illuminate\Support\Facades\Http;
  */
 class MetaWhatsAppClient implements ChannelClientInterface
 {
-    private const API_VERSION = 'v21.0';
+    public const API_VERSION = 'v21.0';
 
     public function sendTextMessage(Channel $channel, string $to, string $message): void
     {

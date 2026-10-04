@@ -9,6 +9,7 @@ use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Implementación real para el MVP — resuelve el Channel de WhatsApp de la
@@ -25,6 +26,14 @@ use App\Enums\ChannelType;
  * No usa ChannelResolver (Hito 4) — eso resuelve a qué Organization
  * pertenece un mensaje ENTRANTE. Acá el caller ya tiene la Organization
  * (viene de una Booking ya creada); solo hace falta su canal de salida.
+ *
+ * B6: el canal de salida es SIEMPRE el Channel BUSINESS de la Organization
+ * — esta clase les habla a sus clientes. Nunca el CENTRAL (que no
+ * pertenece a ninguna Organization, y por el que solo se le habla al owner:
+ * ver OwnerNotifierInterface). Si la Organization todavía no tiene un
+ * BUSINESS activo (ej. recién registrada, antes de conectar su número), se
+ * loguea el motivo y se lanza NotificationDeliveryException, igual que
+ * antes — nunca se cae a otro número.
  */
 class WhatsAppNotificationSender implements NotificationSenderInterface
 {
@@ -54,21 +63,29 @@ class WhatsAppNotificationSender implements NotificationSenderInterface
     private function activeWhatsAppChannelFor(Organization $organization): Channel
     {
         $channel = $organization->channels()
+            ->business()
             ->where('channel_type', ChannelType::WHATSAPP->value)
             ->first();
 
         if (! $channel) {
-            throw new NotificationDeliveryException(
-                "La organización #{$organization->id} no tiene un canal de WhatsApp vinculado."
-            );
+            $this->refuse($organization, null, "La organización #{$organization->id} no tiene un canal de WhatsApp BUSINESS vinculado.");
         }
 
         if ($channel->status !== ChannelStatus::ACTIVE) {
-            throw new NotificationDeliveryException(
-                "El canal #{$channel->id} de la organización #{$organization->id} no está activo (estado: {$channel->status->value})."
-            );
+            $this->refuse($organization, $channel, "El canal #{$channel->id} de la organización #{$organization->id} no está activo (estado: {$channel->status->value}).");
         }
 
         return $channel;
+    }
+
+    private function refuse(Organization $organization, ?Channel $channel, string $reason): never
+    {
+        Log::warning('WhatsAppNotificationSender: envío al cliente no realizado', [
+            'organization_id' => $organization->id,
+            'channel_id' => $channel?->id,
+            'reason' => $reason,
+        ]);
+
+        throw new NotificationDeliveryException($reason);
     }
 }

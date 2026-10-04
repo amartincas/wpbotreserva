@@ -8,7 +8,6 @@ use App\Application\Contracts\ConversationSessionRepositoryInterface;
 use App\Application\Contracts\OrganizationlessAgentInterface;
 use App\Application\Conversations\BotMessages\BotMessageRepository;
 use App\Application\Conversations\Flows\AiFieldExtractor;
-use App\Application\Conversations\Flows\ContactPhoneFieldExtractor;
 use App\Application\Conversations\Flows\ConversationalFlowRunner;
 use App\Application\Conversations\Flows\DraftResourceCatalog;
 use App\Application\Conversations\Flows\DurationFieldExtractor;
@@ -21,7 +20,7 @@ use App\Application\Conversations\Flows\ServicePriceResult;
 use App\Application\Conversations\Flows\ServiceResourceSelectionFlow;
 use App\Application\Conversations\Flows\SpanishWeekdayNames;
 use App\Application\Conversations\Flows\WeeklyScheduleFieldExtractor;
-use App\Application\Exceptions\ChannelAlreadyRegisteredException;
+use App\Application\Exceptions\OwnerAlreadyRegisteredException;
 use App\Application\Tenancy\RegisterOrganizationCommand;
 use App\Application\Tenancy\RegisterOrganizationData;
 use App\Application\Tenancy\ResourceRegistrationData;
@@ -42,9 +41,11 @@ use App\Domain\Tenancy\Organization;
  * en vez de forzarlos dentro de FlowStep/ConversationalFlowRunner, que
  * fueron validados deliberadamente para "N campos fijos", no bucles.
  *
- * ownerPhone y channel nunca se preguntan como FlowStep: ya se conocen del
- * propio mensaje/sesión — preguntarlos sería redundante y rompería "un dato
- * a la vez, solo lo que hace falta".
+ * ownerPhone nunca se pregunta como FlowStep: es el teléfono de quien
+ * escribe — preguntarlo sería redundante y rompería "un dato a la vez, solo
+ * lo que hace falta". B5: el registro ya no vincula ningún Channel — corre
+ * en el CENTRAL, que no pertenece a ninguna Organization; el WhatsApp propio
+ * del negocio se conecta después (B9).
  *
  * Los recursos se recolectan ANIDADOS dentro de cada servicio (¿quién lo
  * presta?), vía ServiceResourceSelectionFlow con un DraftResourceCatalog —
@@ -146,7 +147,6 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
         $this->resourceFlow = new ServiceResourceSelectionFlow(
             new DraftResourceCatalog,
             new AiFieldExtractor($ai, 'nombre del recurso', 'El nombre de la persona o recurso que va a atender.', $botMessages),
-            new ContactPhoneFieldExtractor($botMessages),
             new WeeklyScheduleFieldExtractor($ai, $botMessages),
             self::YES_WORDS,
             self::NO_WORDS,
@@ -501,7 +501,7 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             $draft['services'],
         );
         $resources = array_map(
-            fn (array $r) => new ResourceRegistrationData($r['name'], $r['weeklySchedule'], $r['contactPhone'] ?? null),
+            fn (array $r) => new ResourceRegistrationData($r['name'], $r['weeklySchedule']),
             $draft['resources'],
         );
 
@@ -509,46 +509,40 @@ class RegistroNegocioAgent implements OrganizationlessAgentInterface
             $result = $this->registerOrganization->handle(new RegisterOrganizationData(
                 organizationName: $draft['organizationName'],
                 ownerPhone: $message->fromPhone,
-                channel: $session->channel,
                 city: $draft['city'] ?? null,
                 address: $draft['address'] ?? null,
                 services: $services,
                 resources: $resources,
                 organizationDescription: $draft['organizationDescription'] ?? null,
             ));
-        } catch (ChannelAlreadyRegisteredException) {
-            // Fase 6 — capa 2 disparada de verdad: una condición de carrera
-            // real (dos remitentes distintos del mismo Channel confirmando
-            // casi al mismo tiempo, ver ChannelAlreadyRegisteredException)
-            // ganó en la base de datos antes de que llegáramos acá, pese a
-            // que el guard conversacional del Router ya había dejado pasar
-            // este registro como "fresco". Mismo mensaje que ese guard, para
-            // que el dueño vea una respuesta consistente sin importar en qué
-            // capa se detectó.
+        } catch (OwnerAlreadyRegisteredException) {
+            // B5 — capa 2 del doble registro: este owner ya tiene una
+            // Organization (UNIQUE(owner_phone)), aunque el guard del Router
+            // haya dejado pasar el registro — porque ya estaba en curso
+            // cuando el owner tenía negocio, o porque otra confirmación suya
+            // ganó la carrera. RegisterOrganizationCommand ya revirtió todo;
+            // mismo mensaje que el guard, para que el dueño vea una
+            // respuesta consistente sin importar en qué capa se detectó.
             $this->drafts->forget($session);
             $this->sessions->recordIntent($session, null);
             $this->reply($session, $this->botMessages->render('registro.negocio_bloqueado')
-                ?? 'Este negocio ya está registrado. Si necesitás agregar un servicio, cambiar un horario o hacer otra gestión, contame qué querés hacer.');
+                ?? 'Tu negocio ya está registrado con este número. Si necesitás agregar un servicio, cambiar un horario o hacer otra gestión, contame qué querés hacer.');
 
             return;
         }
 
-        // Caso real: en un Channel que ya tenía otra Organization vinculada
-        // (número de prueba compartido entre varios pilotos), la sesión de
-        // este mismo teléfono había quedado memoizada a esa otra
-        // organización desde antes (SingleOrganizationResolver reusa
-        // session->organization_id sin volver a resolver). Sin este
-        // re-attach, el resto de la conversación — ej. "quiero agregar un
-        // servicio" en el negocio recién creado — seguía resolviendo contra
-        // la organización vieja, y como el dueño no coincidía, la acción se
-        // rechazaba en silencio y el mensaje caía a fuera de alcance.
+        // Deja la sesión del CENTRAL apuntando al negocio recién creado ya
+        // en este mismo mensaje. El Router lo volvería a resolver por
+        // owner_phone en el próximo (OwnerOrganizationResolver), pero así
+        // la sesión nunca queda, ni por un instante, sin la Organization
+        // que este owner acaba de registrar.
         $this->sessions->attachOrganization($session, Organization::findOrFail($result->organizationId));
 
         $this->drafts->forget($session);
         $this->sessions->recordIntent($session, null);
 
         $this->reply($session, $this->botMessages->render('registro.listo', ['negocio' => $result->organizationName])
-            ?? "¡Listo! «{$result->organizationName}» quedó registrado. Ya podés recibir reservas por acá.");
+            ?? "¡Listo! «{$result->organizationName}» quedó registrado. El próximo paso es conectar el WhatsApp propio de tu negocio: cuando esté activo, tus clientes van a poder reservar escribiéndole a ese número. Mientras tanto, podés administrar tu negocio desde acá.");
     }
 
     /**

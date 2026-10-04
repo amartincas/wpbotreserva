@@ -20,6 +20,13 @@ interface ConversationSessionRepositoryInterface
     public function attachOrganization(ConversationSession $session, Organization $organization): void;
 
     /**
+     * B4: en el CENTRAL, si el remitente ya no resuelve a ninguna
+     * Organization, la sesión no puede conservar una memoizada — las
+     * strategies leen $session->organization.
+     */
+    public function detachOrganization(ConversationSession $session): void;
+
+    /**
      * $intent === null limpia la continuidad — lo usa el Agent dueño de un
      * flujo multi-turno al completarlo (Hito 5/6), nunca el classifier.
      */

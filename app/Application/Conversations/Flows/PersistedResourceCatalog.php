@@ -26,9 +26,9 @@ final class PersistedResourceCatalog implements ResourceCatalogInterface
             ->all();
     }
 
-    public function createNew(array $draft, string $name, array $schedule, ?string $contactPhone = null): array
+    public function createNew(array $draft, string $name, array $schedule): array
     {
-        $resource = $this->addResource->handle($this->organization, new ResourceRegistrationData($name, $schedule, $contactPhone));
+        $resource = $this->addResource->handle($this->organization, new ResourceRegistrationData($name, $schedule));
 
         return [$draft, $resource->id];
     }

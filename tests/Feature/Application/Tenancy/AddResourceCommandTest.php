@@ -13,6 +13,7 @@ use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
+use Illuminate\Support\Facades\Schema;
 
 function addResourceFixtureOrganization(): Organization
 {
@@ -27,12 +28,14 @@ function addResourceFixtureOrganization(): Organization
     $result = $command->handle(new RegisterOrganizationData(
         organizationName: 'Consultorio Dra. Ríos',
         ownerPhone: '+573008888888',
-        channel: $channel,
         city: 'Medellín',
         address: 'Cl 10 # 20-30',
         services: [new ServiceRegistrationData('Consulta', 30)],
         resources: [new ResourceRegistrationData('Dra. Ríos', [new WeeklyScheduleSlot(1, '09:00', '17:00')])],
     ));
+    // B5: el registro ya no vincula ningún Channel — el BUSINESS del negocio
+    // se conecta aparte (B9); acá se vincula a mano para el fixture.
+    $channel->organizations()->attach($result->organizationId, ['is_primary' => true]);
 
     return Organization::findOrFail($result->organizationId);
 }
@@ -58,30 +61,18 @@ test('crea una persona/recurso nueva con su horario semanal, en la sede principa
     expect($organization->resources()->count())->toBe(2);
 });
 
-test('Fase 2A: persiste el contact_phone del recurso nuevo, cast por PhoneNumberCast, distinto de owner_phone', function () {
+test('B8: crea el Resource sin teléfono — la columna ya no existe', function () {
     $organization = addResourceFixtureOrganization();
 
     $resource = (new AddResourceCommand(app(EntitlementCheckerInterface::class)))->handle(
         $organization,
-        new ResourceRegistrationData('Edgar Torres', [new WeeklyScheduleSlot(2, '10:00', '18:00')], '+573007778899'),
+        new ResourceRegistrationData('Edgar Torres', [new WeeklyScheduleSlot(2, '10:00', '18:00')]),
     );
 
-    expect($resource->contact_phone->value())->toBe('+573007778899');
-    expect($resource->contact_phone->value())->not->toBe($organization->owner_phone);
-});
-
-test('Fase 2A / PhoneNumberCast: un Resource histórico con contact_phone NULL se lee sin error, no adivina ni rompe', function () {
-    $organization = addResourceFixtureOrganization();
-
-    // Mismo caso que un Resource creado antes de Fase 2A (columna nullable,
-    // nunca poblada) — el cast debe leerlo como NULL, nunca lanzar.
-    $historic = (new AddResourceCommand(app(EntitlementCheckerInterface::class)))->handle(
-        $organization,
-        new ResourceRegistrationData('Recurso histórico', []),
-    );
-
-    expect($historic->contact_phone)->toBeNull();
-    expect($historic->fresh()->contact_phone)->toBeNull();
+    expect(Schema::hasColumn('resources', 'contact_phone'))->toBeFalse();
+    expect(array_key_exists('contact_phone', $resource->fresh()->getAttributes()))->toBeFalse();
+    expect($resource->fresh()->display_name)->toBe('Edgar Torres');
+    expect($resource->schedules)->toHaveCount(1);
 });
 
 test('si EntitlementChecker rechaza, lanza EntitlementDeniedException y no crea nada', function () {

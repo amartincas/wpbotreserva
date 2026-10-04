@@ -17,9 +17,11 @@ use App\Domain\Conversational\Intent;
 use App\Domain\Tenancy\Channel;
 use App\Domain\Tenancy\Organization;
 use App\Enums\ChannelProvider;
+use App\Enums\ChannelRole;
 use App\Enums\ChannelStatus;
 use App\Enums\ChannelType;
 use App\Models\BotMessage;
+use Illuminate\Support\Facades\DB;
 
 function registroFakeDraftRepository(): ConversationDraftRepositoryInterface
 {
@@ -95,11 +97,16 @@ function registroNeverCalledAi(): AiServiceInterface
     };
 }
 
+/**
+ * B5: el onboarding corre en el número CENTRAL (sin Organization, sin
+ * vínculo), igual que en producción.
+ */
 function registroFixtureSession(string $phoneNumberId = 'wamid-registro'): ConversationSession
 {
     $channel = Channel::create([
         'provider' => ChannelProvider::META_CLOUD_API,
         'channel_type' => ChannelType::WHATSAPP,
+        'role' => ChannelRole::CENTRAL,
         'phone_number_id' => $phoneNumberId,
         'status' => ChannelStatus::ACTIVE,
     ]);
@@ -476,7 +483,6 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio
     $agent->handle(registroFixtureMessage('Carlos'), $session);
-    $agent->handle(registroFixtureMessage('+573001112233'), $session); // Fase 2A: teléfono obligatorio del profesional
     // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): tras crear a Carlos (el
     // único recurso), el draft queda con exactamente 1 -> autoasigna y pasa
     // directo a "¿agregás otro servicio?", sin preguntar "¿agregás otra
@@ -505,13 +511,11 @@ test('post-E2E Fase 1 (Hallazgo 2, caso A): un recurso ya cargado en un servicio
     $carlos = $org->resources->firstOrFail();
     expect($carlos->display_name)->toBe('Carlos');
 
-    // Fase 2A: contact_phone (el profesional) queda persistido, cast por
-    // PhoneNumberCast, y es un dato distinto de owner_phone (quien tuvo la
-    // conversación de registro) — no hay ningún fallback implícito entre
-    // ambos.
-    expect($carlos->contact_phone->value())->toBe('+573001112233');
+    // B8: el recurso no tiene teléfono propio — la pregunta nunca apareció
+    // y la columna ya no existe. El único teléfono del negocio es el owner.
+    expect(collect($sent)->pluck('message')->filter(fn ($m) => str_contains($m, 'número de WhatsApp')))->toHaveCount(0);
+    expect(array_key_exists('contact_phone', $carlos->getAttributes()))->toBeFalse();
     expect($org->owner_phone)->toBe('+573001234567');
-    expect($carlos->contact_phone->value())->not->toBe($org->owner_phone);
 
     // Carlos queda prestando los dos servicios.
     foreach ($org->services as $service) {
@@ -542,7 +546,6 @@ test('post-E2E Fase 1 (Hallazgo 1, segunda ronda): negocio nuevo, primer servici
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio -> 0 recursos -> pide directo el nombre
     $agent->handle(registroFixtureMessage('Laura'), $session);
-    $agent->handle(registroFixtureMessage('3011234567'), $session); // Fase 2A: teléfono obligatorio, formato local sin +57
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session); // Laura queda como el único recurso -> autoasignación inmediata
 
     // La pregunta "¿Agregás otra persona o recurso para este servicio?"
@@ -585,7 +588,6 @@ test('Fase 7: horario con abreviaturas y minutos ("lun a vie de 9 a 17, sáb de 
     $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
     $agent->handle(registroFixtureMessage('no'), $session); // sin precio
     $agent->handle(registroFixtureMessage('Laura'), $session);
-    $agent->handle(registroFixtureMessage('3011234567'), $session);
     $agent->handle(registroFixtureMessage('lun a vie de 9 a 17, sáb de 9:30 a 13:15'), $session);
     $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
     $agent->handle(registroFixtureMessage('sí'), $session);
@@ -665,7 +667,10 @@ test('al confirmar con sí, registra la organización con sus servicios/recursos
     $org = Organization::first();
     expect($org->name)->toBe('Restaurante El Sabor');
     expect($org->owner_phone)->toBe('+573001234567');
-    expect($org->channels->first()->id)->toBe($session->channel_id);
+    // B5: el CENTRAL por el que se hizo el onboarding nunca se vincula.
+    expect($org->channels)->toHaveCount(0);
+    expect($session->channel->fresh()->organizations)->toHaveCount(0);
+    expect(DB::table('channel_organization')->count())->toBe(0);
     expect($org->services)->toHaveCount(1);
     expect($org->resources)->toHaveCount(1);
 
@@ -675,6 +680,8 @@ test('al confirmar con sí, registra la organización con sus servicios/recursos
 
     expect($sent)->toHaveCount(1);
     expect($sent[0]['message'])->toContain('Restaurante El Sabor');
+    expect($sent[0]['message'])->toContain('conectar el WhatsApp propio de tu negocio');
+    expect($sent[0]['message'])->not->toContain('recibir reservas por acá');
 });
 
 test('caso real: si la sesión ya estaba memoizada a otra organización (número de prueba compartido), el registro la reengancha a la recién creada', function () {
@@ -803,7 +810,6 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     $agent->handle(registroFixtureMessage('Relajante'), $session); // descripción del servicio 1
     $agent->handle(registroFixtureMessage('45000'), $session); // precio NUMÉRICO del servicio 1
     $agent->handle(registroFixtureMessage('Laura'), $session); // único recurso -> 0 existentes, pide nombre
-    $agent->handle(registroFixtureMessage('+573011234567'), $session); // Fase 2A: teléfono obligatorio
     // Post-E2E Fase 1 (Hallazgo 1, segunda ronda): tras crear a Laura (el
     // único recurso), autoasigna y pasa directo a "¿agregás otro
     // servicio?" — ya no pregunta "¿agregás otra persona?", así que no
@@ -838,13 +844,9 @@ test('post-E2E Fase 1 (Hallazgo 1): 2 servicios en la misma conversación, cada 
     expect($consulta->resources->pluck('display_name')->all())->toBe(['Laura']);
 });
 
-test('Fase 2A: un rechazo explícito, una respuesta ambigua y un teléfono inválido re-preguntan sin avanzar al horario — el dato es obligatorio', function () {
+test('B8: tras el nombre de un recurso nuevo pasa directo al horario — nunca pregunta un teléfono', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
-    // Draft sembrado directamente en el estado "ya se dio el nombre del
-    // recurso nuevo, falta su teléfono" — mismo patrón de seed directo ya
-    // usado en este archivo para probar un estado puntual sin repetir toda
-    // la conversación previa.
     $drafts->put($session, [
         '_started' => true,
         'organizationName' => 'Restaurante El Sabor',
@@ -859,93 +861,46 @@ test('Fase 2A: un rechazo explícito, una respuesta ambigua y un teléfono invá
         '_pendingServiceDescription' => null,
         '_pendingServicePrice' => null,
         '_pendingServiceResourceIds' => [],
-        '_awaitingNewResourceContactPhone' => true,
-        '_pendingNewResourceName' => 'Carlos',
+        '_awaitingNewResourceName' => true,
     ]);
     $sent = [];
-    $agent = buildRegistroAgent($drafts, $sent, registroNeverCalledAi());
+    $agent = buildRegistroAgent($drafts, $sent, registroQueuedAi(['Carlos']));
 
-    // Rechazo explícito ("no") -> re-pregunta explicando por qué hace falta.
-    $agent->handle(registroFixtureMessage('no'), $session);
+    $agent->handle(registroFixtureMessage('Carlos'), $session);
+
+    $draft = $drafts->get($session);
+    expect($draft['_awaitingNewResourceSchedule'])->toBeTrue();
+    expect($draft['_pendingNewResourceName'])->toBe('Carlos');
     expect($sent)->toHaveCount(1);
+    expect($sent[0]['message'])->toContain('horario');
     expect($sent[0]['message'])->toContain('Carlos');
-    expect($sent[0]['message'])->toContain('Necesitamos');
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-    expect($drafts->get($session))->not->toHaveKey('_pendingNewResourceContactPhone');
+    expect($sent[0]['message'])->not->toContain('número de WhatsApp');
 
-    // Respuesta ambigua (sin ningún dígito) -> re-pregunta, mensaje distinto
-    // al de rechazo explícito.
-    $agent->handle(registroFixtureMessage('no tengo uno todavía'), $session);
-    expect($sent)->toHaveCount(2);
-    expect($sent[1]['message'])->toContain('No pude reconocer el número');
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-
-    // Teléfono con formato inválido -> re-pregunta, nunca se adivina.
-    $agent->handle(registroFixtureMessage('123'), $session);
-    expect($sent)->toHaveCount(3);
-    expect($sent[2]['message'])->toContain('No pude reconocer el número');
-    expect($drafts->get($session)['_awaitingNewResourceContactPhone'])->toBeTrue();
-
-    // Un teléfono válido recién ahí avanza al horario.
-    $agent->handle(registroFixtureMessage('+573001112233'), $session);
-    expect($drafts->get($session))->not->toHaveKey('_awaitingNewResourceContactPhone');
-    expect($drafts->get($session)['_awaitingNewResourceSchedule'])->toBeTrue();
-    expect($drafts->get($session)['_pendingNewResourceContactPhone'])->toBe('+573001112233');
-    expect($sent[array_key_last($sent)]['message'])->toContain('horario');
-});
-
-test('Fase 2A: si el teléfono del profesional coincide con owner_phone, se acepta igual — son datos independientes, sin fallback implícito entre ambos', function () {
-    $session = registroFixtureSession(); // customer_phone/ownerPhone = +573001234567
-    $drafts = registroFakeDraftRepository();
-    $sent = [];
-    // Fase 6: 'Cali'/'Carrera 10 #20-30' no van más en la cola — ciudad/
-    // dirección son FreeTextFieldExtractor, nunca llaman a la IA.
-    $ai = registroQueuedAi(['Spa Lucía', 'Masaje relajante', 'Laura']);
-    $agent = buildRegistroAgent($drafts, $sent, $ai);
-
-    $agent->handle(registroFixtureMessage('hola'), $session);
-    $agent->handle(registroFixtureMessage('Spa Lucía'), $session);
-    $agent->handle(registroFixtureMessage('Cali'), $session);
-    $agent->handle(registroFixtureMessage('Carrera 10 #20-30'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del negocio
-    $agent->handle(registroFixtureMessage('Masaje relajante'), $session);
-    $agent->handle(registroFixtureMessage('45 minutos'), $session); // determinista
-    $agent->handle(registroFixtureMessage('no'), $session); // sin descripción del servicio
-    $agent->handle(registroFixtureMessage('no'), $session); // sin precio
-    $agent->handle(registroFixtureMessage('Laura'), $session);
-    $agent->handle(registroFixtureMessage('+573001234567'), $session); // mismo número que el dueño que está registrando
     $agent->handle(registroFixtureMessage('Lunes de 9 a 17'), $session);
-    $agent->handle(registroFixtureMessage('no'), $session); // termina servicios -> confirmación
-    $agent->handle(registroFixtureMessage('sí'), $session);
 
-    $org = Organization::firstOrFail();
-    $laura = $org->resources->firstOrFail();
-    expect($laura->contact_phone->value())->toBe('+573001234567');
-    expect($org->owner_phone)->toBe('+573001234567');
-    // Coinciden porque el usuario lo escribió así, no porque el código haya
-    // copiado uno al otro — Fase 2A prohíbe explícitamente ese fallback.
-    expect($laura->contact_phone->value())->toBe($org->owner_phone);
+    $draft = $drafts->get($session);
+    expect($draft['resources'])->toHaveCount(1);
+    expect($draft['resources'][0])->toBe(['name' => 'Carlos', 'weeklySchedule' => $draft['resources'][0]['weeklySchedule']]);
 });
 
 /**
- * Fase 6 — Cambio A.5, capa 2 disparada de verdad: simula que, entre el
- * guard conversacional del Router (capa 1, ya pasado para llegar a este
- * punto) y la confirmación final, otro proceso ganó la condición de carrera
- * y ya registró este mismo Channel. RegisterOrganizationCommand lanza
- * ChannelAlreadyRegisteredException — el Agent debe responder con el mismo
- * mensaje que el guard, no con un error genérico, y dejar la sesión limpia.
+ * B5 — capa 2 del doble registro, ahora por owner: el registro llega a la
+ * confirmación aunque este owner ya tenga una Organization (el registro ya
+ * estaba en curso cuando la creó, o otra confirmación suya ganó la
+ * carrera). RegisterOrganizationCommand lanza OwnerAlreadyRegisteredException
+ * — el Agent responde con el mismo mensaje que el guard, sin crear nada y
+ * dejando la sesión limpia.
  */
-test('Fase 6: si el Channel ya se registró entre el guard y la confirmación (condición de carrera), responde claro en vez de romper', function () {
+test('B5: si el owner ya tiene una Organization al confirmar (registro en curso o carrera), responde con el bloqueo y no crea nada', function () {
     $session = registroFixtureSession();
     $drafts = registroFakeDraftRepository();
     $sessions = new EloquentConversationSessionRepository;
     $sessions->recordIntent($session, Intent::RegistroNegocio);
 
-    // "Otro proceso" ya registró este mismo Channel antes de esta confirmación.
+    // Este mismo owner (el remitente del fixture) ya registró su negocio.
     (new RegisterOrganizationCommand(new UnlimitedEntitlementChecker))->handle(new RegisterOrganizationData(
         organizationName: 'Ganó la carrera',
-        ownerPhone: '+573009999999',
-        channel: $session->channel,
+        ownerPhone: '+573001234567',
         city: null,
         address: null,
         services: [],
@@ -973,6 +928,8 @@ test('Fase 6: si el Channel ya se registró entre el guard y la confirmación (c
 
     expect(Organization::count())->toBe(1); // nunca se creó "Restaurante El Sabor"
     expect(Organization::first()->name)->toBe('Ganó la carrera');
+    expect(DB::table('locations')->count())->toBe(1); // solo la de "Ganó la carrera"
+    expect(DB::table('channel_organization')->count())->toBe(0);
 
     expect($sent)->toHaveCount(1);
     expect($sent[0]['message'])->toContain('ya está registrado');

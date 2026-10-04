@@ -122,7 +122,7 @@ class ConfirmacionAsistenciaAgent implements AgentInterface
 
         // Multi-tenancy: defensa en profundidad, no confiar únicamente en
         // que la consulta previa ya haya scopeado por Organization
-        // (mismo criterio que ProfessionalRecipientResolver, Fase 2B).
+        // (mismo criterio que los listeners de aviso al negocio, Fase 2B).
         if ($booking === null || $booking->organization_id !== $organization->id) {
             $this->reply($organization, $toPhone, 'No pude encontrar esa reserva.');
             $this->sessions->recordIntent($session, null);
