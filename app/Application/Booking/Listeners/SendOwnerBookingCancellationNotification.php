@@ -22,6 +22,8 @@ class SendOwnerBookingCancellationNotification implements ShouldQueue, ShouldQue
 
     private const TEMPLATE_LANGUAGE = 'es';
 
+    private const NO_REASON = 'Sin motivo';
+
     public function __construct(
         private readonly OwnerNotifierInterface $owner,
         private readonly ProfessionalNotificationIdempotency $idempotency,
@@ -59,19 +61,27 @@ class SendOwnerBookingCancellationNotification implements ShouldQueue, ShouldQue
     {
         $localStartsAt = $booking->starts_at->setTimezone($booking->organization->timezone);
 
-        // {{5}} siempre se manda (Meta exige que el conteo de variables
-        // coincida con el template aprobado) — vacío cuando no hay motivo,
-        // nunca inventado (Diseño Fase 2B, sección 6).
-        $reasonSuffix = $booking->cancellation_reason !== null
-            ? " Motivo: {$booking->cancellation_reason}."
-            : '';
-
         return [
             $booking->service->name,
             $booking->customer->name ?? $booking->customer->phone->value(),
             $localStartsAt->translatedFormat('d/m/Y'),
             $localStartsAt->translatedFormat('H:i'),
-            $reasonSuffix,
+            $this->reasonParameter($booking->cancellation_reason),
         ];
+    }
+
+    /**
+     * {{5}} siempre se manda (Meta exige que el conteo de variables coincida
+     * con el template aprobado) y nunca vacío: Meta rechaza parámetros
+     * vacíos. El template ya trae "Motivo: {{5}}.", así que acá va solo el
+     * texto. El motivo lo escribe el cliente libremente — se colapsan saltos
+     * de línea, tabs y espacios repetidos (Meta rechaza el parámetro con
+     * error 132018) y se quita el punto final para no duplicarlo.
+     */
+    private function reasonParameter(?string $reason): string
+    {
+        $normalized = rtrim(trim(preg_replace('/\s+/u', ' ', $reason ?? '')), '.');
+
+        return $normalized !== '' ? $normalized : self::NO_REASON;
     }
 }

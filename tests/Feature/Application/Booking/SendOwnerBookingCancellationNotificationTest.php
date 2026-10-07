@@ -87,7 +87,7 @@ test('implementa ShouldQueueAfterCommit', function () {
     expect(buildOwnerCancellationListener(ownerCancellationFakeClient($sent)))->toBeInstanceOf(ShouldQueueAfterCommit::class);
 });
 
-test('cancelación: avisa al owner_phone por el CENTRAL, sin motivo', function () {
+test('cancelación: avisa al owner_phone por el CENTRAL; sin motivo manda "Sin motivo", nunca vacío', function () {
     $central = ownerCancellationFixtureCentral();
     $booking = ownerCancellationFixtureBooking();
     $sent = [];
@@ -98,7 +98,7 @@ test('cancelación: avisa al owner_phone por el CENTRAL, sin motivo', function (
     expect($sent[0]['channel']->is($central))->toBeTrue();
     expect($sent[0]['to'])->toBe('+573001234567');
     expect($sent[0]['templateName'])->toBe('reserva_cancelada_profesional');
-    expect($sent[0]['bodyParameters'])->toBe(['Corte', 'Ana', '05/10/2026', '20:00', '']);
+    expect($sent[0]['bodyParameters'])->toBe(['Corte', 'Ana', '05/10/2026', '20:00', 'Sin motivo']);
 });
 
 test('con motivo de cancelación, se incluye tal cual en el último parámetro — nunca inventado', function () {
@@ -108,7 +108,27 @@ test('con motivo de cancelación, se incluye tal cual en el último parámetro �
 
     buildOwnerCancellationListener(ownerCancellationFakeClient($sent))->handle(new BookingCancelled($booking));
 
-    expect($sent[0]['bodyParameters'][4])->toBe(' Motivo: El cliente tuvo una emergencia.');
+    expect($sent[0]['bodyParameters'][4])->toBe('El cliente tuvo una emergencia');
+});
+
+test('el motivo se normaliza para Meta: sin saltos de línea, tabs, espacios repetidos ni punto final', function () {
+    ownerCancellationFixtureCentral();
+    $booking = ownerCancellationFixtureBooking("  Viaje\n\nimprevisto\t  de   trabajo.  ");
+    $sent = [];
+
+    buildOwnerCancellationListener(ownerCancellationFakeClient($sent))->handle(new BookingCancelled($booking));
+
+    expect($sent[0]['bodyParameters'][4])->toBe('Viaje imprevisto de trabajo');
+});
+
+test('un motivo solo con espacios o puntos cuenta como sin motivo', function () {
+    ownerCancellationFixtureCentral();
+    $booking = ownerCancellationFixtureBooking(" \n . ");
+    $sent = [];
+
+    buildOwnerCancellationListener(ownerCancellationFakeClient($sent))->handle(new BookingCancelled($booking));
+
+    expect($sent[0]['bodyParameters'][4])->toBe('Sin motivo');
 });
 
 test('idempotencia: 2 llamadas para la misma cancelación mandan un solo aviso', function () {
